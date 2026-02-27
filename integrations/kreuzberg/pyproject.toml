@@ -126,13 +126,12 @@ ban-relative-imports = "parents"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests can use magic values, assertions, and relative imports
-"tests/**/*" = ["PLR2004", "S101", "TID252"]
+"tests/**/*" = ["PLR2004", "S101", "S108", "TID252"]
 
 [tool.mypy]
+strict = true
 install_types = true
 non_interactive = true
-check_untyped_defs = true
-disallow_incomplete_defs = true
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers"

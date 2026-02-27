@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from haystack import Document, component, default_from_dict, default_to_dict, logging
 from haystack.components.converters.utils import (
@@ -90,7 +90,7 @@ class KreuzbergConverter:
         batch: bool = True,
         append_tables_to_content: bool = True,
         easyocr_kwargs: dict[str, Any] | None = None,
-    ):
+    ) -> None:
         """
         Create a `KreuzbergConverter` component.
 
@@ -322,34 +322,33 @@ class KreuzbergConverter:
 
         None values are filtered out.
         """
-        meta: dict[str, Any] = {}
+        # Flatten kreuzberg document metadata (format-specific TypedDict)
+        meta: dict[str, Any] = {
+            k: v
+            for k, v in result.metadata.items()
+            if v is not None and k not in _METADATA_OVERLAP_KEYS
+        } if result.metadata else {}
 
-        # A1: Flatten kreuzberg document metadata (format-specific TypedDict)
-        if result.metadata:
-            for key, value in dict(result.metadata).items():
-                if value is not None and key not in _METADATA_OVERLAP_KEYS:
-                    meta[key] = value
-
-        # A3: Quality score
+        # Quality score
         if result.quality_score is not None:
             meta["quality_score"] = result.quality_score
 
-        # A3: Processing warnings
+        # Processing warnings
         if result.processing_warnings:
             meta["processing_warnings"] = _serialize_warnings(result.processing_warnings)
 
-        # A4: Detected languages
+        # Detected languages
         if result.detected_languages:
             meta["detected_languages"] = list(result.detected_languages)
 
-        # A5: Extracted keywords
+        # Extracted keywords
         if result.extracted_keywords:
             meta["extracted_keywords"] = [
                 {"text": kw.text, "score": kw.score, "algorithm": kw.algorithm}
                 for kw in result.extracted_keywords
             ]
 
-        # A6: Output format tracking
+        # Output format tracking
         if result.output_format:
             meta["output_format"] = str(result.output_format)
         if result.result_format:
@@ -357,12 +356,12 @@ class KreuzbergConverter:
         if result.mime_type:
             meta["mime_type"] = result.mime_type
 
-        # A2: Tables metadata
+        # Tables metadata
         if result.tables:
             meta["table_count"] = len(result.tables)
             meta["tables"] = _serialize_tables(result.tables)
 
-        # E1: Image extraction metadata (no binary data)
+        # Image extraction metadata (no binary data)
         if result.images:
             meta["image_count"] = len(result.images)
             meta["images"] = [
@@ -377,7 +376,7 @@ class KreuzbergConverter:
                 for img in result.images
             ]
 
-        # E7: PDF annotations
+        # PDF annotations
         if result.annotations:
             meta["annotations"] = _serialize_annotations(result.annotations)
 
@@ -423,11 +422,11 @@ class KreuzbergConverter:
         if not self.store_full_path and "file_path" in source_meta:
             source_meta["file_path"] = Path(source_meta["file_path"]).name
 
-        # E4/E5: Chunking mode — one Document per chunk
+        # Chunking mode — one Document per chunk
         if result.chunks:
             return self._create_chunked_documents(result, base_meta, source_meta, user_meta)
 
-        # B1: Per-page mode — one Document per page
+        # Per-page mode — one Document per page
         if result.pages:
             return self._create_per_page_documents(result, base_meta, source_meta, user_meta)
 
@@ -458,9 +457,8 @@ class KreuzbergConverter:
                 if table_blocks:
                     page_content = page_content + "\n\n" + "\n\n".join(table_blocks)
 
-            page_meta: dict[str, Any] = {**base_meta, **source_meta}
-            page_meta["page_number"] = page.get("page_number")
-            page_meta["is_blank"] = page.get("is_blank", False)
+            page_meta: dict[str, Any] = {**base_meta, **source_meta, "page_number": page.get("page_number"),
+                                         "is_blank": page.get("is_blank", False)}
 
             if page_tables:
                 page_meta["table_count"] = len(page_tables)
@@ -490,7 +488,7 @@ class KreuzbergConverter:
         source_meta: dict[str, Any],
         user_meta: dict[str, Any],
     ) -> list[Document]:
-        """Create one Document per chunk (E4), with optional embeddings (E5)."""
+        """Create one Document per chunk, with optional embeddings."""
         documents: list[Document] = []
         total_chunks = len(result.chunks)
 
@@ -513,7 +511,7 @@ class KreuzbergConverter:
         return documents
 
     # ------------------------------------------------------------------
-    # Raw extraction output (M1)
+    # Raw extraction output
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -579,7 +577,7 @@ class KreuzbergConverter:
         return raw
 
     # ------------------------------------------------------------------
-    # Error handling (H1)
+    # Error handling
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -611,7 +609,7 @@ class KreuzbergConverter:
     # Main entry point
     # ------------------------------------------------------------------
 
-    @component.output_types(documents=list[Document], raw_extraction=list[dict])
+    @component.output_types(documents=list[Document], raw_extraction=list[dict[str, Any]])
     def run(
         self,
         sources: list[str | Path | ByteStream],
@@ -644,7 +642,7 @@ class KreuzbergConverter:
             - `raw_extraction`: A list of serialized kreuzberg
               ExtractionResult dicts, one per successfully processed source.
         """
-        # M2: Expand directories
+        # Expand directories
         has_dirs = any(
             isinstance(s, (str, Path)) and not isinstance(s, ByteStream) and Path(s).is_dir()
             for s in sources
@@ -737,7 +735,7 @@ class KreuzbergConverter:
             raw_extractions.append(self._serialize_result(result))
 
     # ------------------------------------------------------------------
-    # Introspection (J1)
+    # Introspection
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -748,7 +746,7 @@ class KreuzbergConverter:
         :returns:
             List of extractor names.
         """
-        return list_document_extractors()
+        return cast(list[str], list_document_extractors())
 
     @staticmethod
     def supported_ocr_backends() -> list[str]:
@@ -758,7 +756,7 @@ class KreuzbergConverter:
         :returns:
             List of OCR backend names.
         """
-        return list_ocr_backends()
+        return cast(list[str], list_ocr_backends())
 
 
 # ======================================================================
