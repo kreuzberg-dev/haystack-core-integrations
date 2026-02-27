@@ -18,8 +18,6 @@ from kreuzberg import (
     ExtractionConfig,
     ExtractionResult,
     LanguageDetectionConfig,
-    OcrConfig,
-    PageConfig,
     batch_extract_bytes_sync,
     batch_extract_files_sync,
     config_merge,
@@ -33,9 +31,6 @@ from kreuzberg import (
     list_document_extractors,
     list_ocr_backends,
     load_extraction_config_from_file,
-    validate_language_code,
-    validate_ocr_backend,
-    validate_output_format,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,35 +75,18 @@ class KreuzbergConverter:
     )
     ```
 
-    Convenience parameters let you configure common settings without
-    constructing an `ExtractionConfig` manually:
-
-    ```python
-    converter = KreuzbergConverter(
-        output_format="markdown",
-        ocr_backend="tesseract",
-        ocr_language="eng",
-        per_page=True,
-    )
-    ```
-
     The converter exposes two output sockets: `documents` and
     `raw_extraction`. The `raw_extraction` output contains the serialized
     kreuzberg `ExtractionResult` for each source, useful for debugging or
     advanced downstream processing.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         config: ExtractionConfig | None = None,
         config_path: str | Path | None = None,
         store_full_path: bool = False,
-        output_format: str | None = None,
-        ocr_backend: str | None = None,
-        ocr_language: str | None = None,
-        force_ocr: bool | None = None,
-        per_page: bool = False,
         batch: bool = True,
         append_tables_to_content: bool = True,
         easyocr_kwargs: dict[str, Any] | None = None,
@@ -118,8 +96,10 @@ class KreuzbergConverter:
 
         :param config:
             An optional `kreuzberg.ExtractionConfig` object to customize
-            extraction behavior (OCR settings, output format, etc.).
-            If not provided, kreuzberg's defaults are used.
+            extraction behavior. Use this to set output format, OCR backend
+            and language, force-OCR mode, per-page extraction, chunking,
+            keyword extraction, and other kreuzberg options. If not provided,
+            kreuzberg's defaults are used.
         :param config_path:
             Path to a kreuzberg configuration file (`.toml`, `.yaml`, or
             `.json`). When both `config` and `config_path` are provided,
@@ -127,21 +107,6 @@ class KreuzbergConverter:
         :param store_full_path:
             If `True`, the full file path is stored in the Document metadata.
             If `False`, only the file name is stored.
-        :param output_format:
-            Output format for extracted text. One of `"plain"`, `"markdown"`,
-            `"html"`, or `"djot"`. Overrides the value in `config`.
-        :param ocr_backend:
-            OCR backend to use. One of `"tesseract"`, `"easyocr"`, or
-            `"paddleocr"`. Overrides the value in `config`.
-        :param ocr_language:
-            Language code(s) for OCR, e.g. `"eng"` or `"eng+fra+deu"`.
-            Overrides the value in `config`.
-        :param force_ocr:
-            If `True`, force OCR on all documents even when text can be
-            extracted directly. Overrides the value in `config`.
-        :param per_page:
-            If `True`, yield one `Document` per page instead of one per
-            source file. Automatically enables page extraction in the config.
         :param batch:
             If `True`, use kreuzberg's batch extraction APIs which leverage
             Rust's rayon thread pool for parallel processing. If `False`,
@@ -154,26 +119,9 @@ class KreuzbergConverter:
             `"easyocr"` backend. Supports GPU, beam width, model storage,
             and other EasyOCR-specific options.
         """
-        if output_format is not None and not validate_output_format(output_format):
-            msg = f"Invalid output_format: {output_format!r}. Must be one of: 'plain', 'markdown', 'html', 'djot'."
-            raise ValueError(msg)
-        if ocr_backend is not None and not validate_ocr_backend(ocr_backend):
-            msg = f"Invalid ocr_backend: {ocr_backend!r}. Must be one of: 'tesseract', 'easyocr', 'paddleocr'."
-            raise ValueError(msg)
-        if ocr_language is not None:
-            for lang in ocr_language.split("+"):
-                if not validate_language_code(lang.strip()):
-                    msg = f"Invalid language code: {lang.strip()!r}."
-                    raise ValueError(msg)
-
         self.config = config
         self.config_path = str(config_path) if config_path is not None else None
         self.store_full_path = store_full_path
-        self.output_format = output_format
-        self.ocr_backend = ocr_backend
-        self.ocr_language = ocr_language
-        self.force_ocr = force_ocr
-        self.per_page = per_page
         self.batch = batch
         self.append_tables_to_content = append_tables_to_content
         self.easyocr_kwargs = easyocr_kwargs
@@ -191,11 +139,6 @@ class KreuzbergConverter:
             config=config_json,
             config_path=self.config_path,
             store_full_path=self.store_full_path,
-            output_format=self.output_format,
-            ocr_backend=self.ocr_backend,
-            ocr_language=self.ocr_language,
-            force_ocr=self.force_ocr,
-            per_page=self.per_page,
             batch=self.batch,
             append_tables_to_content=self.append_tables_to_content,
             easyocr_kwargs=self.easyocr_kwargs,
@@ -231,8 +174,7 @@ class KreuzbergConverter:
     def _build_config(self) -> ExtractionConfig:
         """
         Build the effective `ExtractionConfig` by merging all configuration
-        sources in priority order: file config < explicit config < convenience
-        parameters < auto-injected settings (e.g. per_page).
+        sources in priority order: file config < explicit config.
 
         Always returns a *fresh* config object — never mutates ``self.config``.
         """
@@ -250,25 +192,6 @@ class KreuzbergConverter:
         if self.config is not None and self.config_path is not None:
             file_config = load_extraction_config_from_file(self.config_path)
             config_merge(config, file_config)
-
-        # Convenience parameter overrides (highest priority, set directly)
-        if self.output_format is not None:
-            config.output_format = self.output_format
-        if self.force_ocr is not None:
-            config.force_ocr = self.force_ocr
-
-        # OCR sub-config: PyO3 returns copies, so we must reassign the whole object
-        if self.ocr_backend is not None or self.ocr_language is not None:
-            current_ocr = config.ocr
-            backend = self.ocr_backend if self.ocr_backend is not None else (current_ocr.backend if current_ocr else "tesseract")
-            language = self.ocr_language if self.ocr_language is not None else (current_ocr.language if current_ocr else "eng")
-            config.ocr = OcrConfig(backend=backend, language=language)
-
-        # Auto-inject per-page extraction (reassign whole PageConfig)
-        if self.per_page:
-            current_pages = config.pages
-            if current_pages is None or not current_pages.extract_pages:
-                config.pages = PageConfig(extract_pages=True)
 
         # Auto-enable language detection if not explicitly configured
         if config.language_detection is None:
@@ -486,11 +409,12 @@ class KreuzbergConverter:
         """
         Create one or more ``Document`` objects from an ``ExtractionResult``.
 
-        Output mode depends on the converter configuration:
+        Output mode depends on what kreuzberg returns:
         - **Default:** one Document per source (unified content).
-        - **per_page=True:** one Document per page.
-        - **Chunking active:** one Document per chunk (when ``result.chunks``
-          is populated via ``ChunkingConfig``).
+        - **Pages present:** one Document per page (when
+          ``PageConfig(extract_pages=True)`` is in the config).
+        - **Chunks present:** one Document per chunk (when
+          ``ChunkingConfig`` is in the config).
         """
         base_meta = self._build_extraction_metadata(result)
 
@@ -504,7 +428,7 @@ class KreuzbergConverter:
             return self._create_chunked_documents(result, base_meta, source_meta, user_meta)
 
         # B1: Per-page mode — one Document per page
-        if self.per_page and result.pages:
+        if result.pages:
             return self._create_per_page_documents(result, base_meta, source_meta, user_meta)
 
         # Default: unified mode — one Document per source

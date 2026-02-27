@@ -20,11 +20,6 @@ class TestKreuzbergConverterInit:
         assert converter.config is None
         assert converter.config_path is None
         assert converter.store_full_path is False
-        assert converter.output_format is None
-        assert converter.ocr_backend is None
-        assert converter.ocr_language is None
-        assert converter.force_ocr is None
-        assert converter.per_page is False
         assert converter.batch is True
         assert converter.append_tables_to_content is True
         assert converter.easyocr_kwargs is None
@@ -35,11 +30,6 @@ class TestKreuzbergConverterInit:
             config=config,
             config_path="/tmp/config.json",
             store_full_path=True,
-            output_format="html",
-            ocr_backend="tesseract",
-            ocr_language="eng",
-            force_ocr=True,
-            per_page=True,
             batch=False,
             append_tables_to_content=False,
             easyocr_kwargs={"gpu": False},
@@ -47,35 +37,9 @@ class TestKreuzbergConverterInit:
         assert converter.config is config
         assert converter.config_path == "/tmp/config.json"
         assert converter.store_full_path is True
-        assert converter.output_format == "html"
-        assert converter.ocr_backend == "tesseract"
-        assert converter.ocr_language == "eng"
-        assert converter.force_ocr is True
-        assert converter.per_page is True
         assert converter.batch is False
         assert converter.append_tables_to_content is False
         assert converter.easyocr_kwargs == {"gpu": False}
-
-    def test_init_validates_output_format(self):
-        with pytest.raises(ValueError, match="Invalid output_format"):
-            KreuzbergConverter(output_format="invalid")
-
-    def test_init_validates_ocr_backend(self):
-        with pytest.raises(ValueError, match="Invalid ocr_backend"):
-            KreuzbergConverter(ocr_backend="invalid")
-
-    def test_init_validates_ocr_language(self):
-        with pytest.raises(ValueError, match="Invalid language code"):
-            KreuzbergConverter(ocr_language="xxx_invalid")
-
-    def test_init_validates_multi_language(self):
-        # Valid multi-language should not raise
-        converter = KreuzbergConverter(ocr_language="eng+fra")
-        assert converter.ocr_language == "eng+fra"
-
-    def test_init_validates_multi_language_with_invalid(self):
-        with pytest.raises(ValueError, match="Invalid language code"):
-            KreuzbergConverter(ocr_language="eng+xxx_invalid")
 
 
 class TestKreuzbergConverterSerialization:
@@ -88,11 +52,6 @@ class TestKreuzbergConverterSerialization:
                 "config": None,
                 "config_path": None,
                 "store_full_path": False,
-                "output_format": None,
-                "ocr_backend": None,
-                "ocr_language": None,
-                "force_ocr": None,
-                "per_page": False,
                 "batch": True,
                 "append_tables_to_content": True,
                 "easyocr_kwargs": None,
@@ -123,16 +82,18 @@ class TestKreuzbergConverterSerialization:
 
     def test_serialization_roundtrip_default(self):
         converter = KreuzbergConverter(
-            output_format="markdown",
-            ocr_backend="tesseract",
-            per_page=True,
+            config=ExtractionConfig(
+                output_format="markdown",
+                ocr=OcrConfig(backend="tesseract", language="eng"),
+            ),
             batch=False,
         )
         d = converter.to_dict()
         restored = KreuzbergConverter.from_dict(d)
-        assert restored.output_format == "markdown"
-        assert restored.ocr_backend == "tesseract"
-        assert restored.per_page is True
+        assert restored.config is not None
+        assert restored.config.output_format == "markdown"
+        assert restored.config.ocr is not None
+        assert restored.config.ocr.backend == "tesseract"
         assert restored.batch is False
 
     def test_serialization_roundtrip_with_config(self):
@@ -158,38 +119,9 @@ class TestKreuzbergConverterBuildConfig:
         assert config.language_detection is not None
         assert config.language_detection.enabled is True
 
-    def test_build_config_with_output_format(self):
-        converter = KreuzbergConverter(output_format="markdown")
-        config = converter._build_config()
-        assert config.output_format == "markdown"
-
-    def test_build_config_with_ocr_params(self):
-        converter = KreuzbergConverter(ocr_backend="tesseract", ocr_language="fra")
-        config = converter._build_config()
-        assert config.ocr is not None
-        assert config.ocr.backend == "tesseract"
-        assert config.ocr.language == "fra"
-
-    def test_build_config_with_force_ocr(self):
-        converter = KreuzbergConverter(force_ocr=True)
-        config = converter._build_config()
-        assert config.force_ocr is True
-
-    def test_build_config_per_page_auto_injects(self):
-        converter = KreuzbergConverter(per_page=True)
-        config = converter._build_config()
-        assert config.pages is not None
-        assert config.pages.extract_pages is True
-
-    def test_build_config_convenience_overrides_config(self):
-        base = ExtractionConfig(output_format="html")
-        converter = KreuzbergConverter(config=base, output_format="markdown")
-        config = converter._build_config()
-        assert config.output_format == "markdown"
-
     def test_build_config_does_not_mutate_self_config(self):
         base = ExtractionConfig(output_format="html")
-        converter = KreuzbergConverter(config=base, output_format="markdown")
+        converter = KreuzbergConverter(config=base)
         converter._build_config()
         assert base.output_format == "html"
 
@@ -300,7 +232,7 @@ class TestKreuzbergConverterMetadata:
         assert doc.meta["result_format"] == "unified"
 
     def test_output_format_markdown(self):
-        converter = KreuzbergConverter(output_format="markdown", batch=False)
+        converter = KreuzbergConverter(config=ExtractionConfig(output_format="markdown"), batch=False)
         result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
         doc = result["documents"][0]
         assert doc.meta["output_format"] == "markdown"
@@ -362,13 +294,17 @@ class TestKreuzbergConverterMetadata:
 
 class TestKreuzbergConverterPerPage:
     def test_per_page_produces_multiple_documents(self):
-        converter = KreuzbergConverter(per_page=True, batch=False)
+        converter = KreuzbergConverter(
+            config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
+        )
         result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
         docs = result["documents"]
         assert len(docs) == 3  # 3-page PDF
 
     def test_per_page_document_metadata(self):
-        converter = KreuzbergConverter(per_page=True, batch=False)
+        converter = KreuzbergConverter(
+            config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
+        )
         result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
         docs = result["documents"]
 
@@ -378,7 +314,9 @@ class TestKreuzbergConverterPerPage:
             assert doc.meta["file_path"] == "sample.pdf"
 
     def test_per_page_with_user_metadata(self):
-        converter = KreuzbergConverter(per_page=True, batch=False)
+        converter = KreuzbergConverter(
+            config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
+        )
         result = converter.run(
             sources=[FIXTURES_DIR / "sample.pdf"],
             meta={"source": "test"},
@@ -387,7 +325,9 @@ class TestKreuzbergConverterPerPage:
             assert doc.meta["source"] == "test"
 
     def test_per_page_raw_extraction_one_per_source(self):
-        converter = KreuzbergConverter(per_page=True, batch=False)
+        converter = KreuzbergConverter(
+            config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
+        )
         result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
         # raw_extraction should have one entry per source, not per page
         assert len(result["raw_extraction"]) == 1
@@ -491,7 +431,9 @@ class TestKreuzbergConverterRawExtraction:
         assert len(raw["extracted_keywords"]) == 3
 
     def test_raw_extraction_pages_when_per_page(self):
-        converter = KreuzbergConverter(per_page=True, batch=False)
+        converter = KreuzbergConverter(
+            config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
+        )
         result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
 
         raw = result["raw_extraction"][0]
@@ -525,13 +467,13 @@ class TestKreuzbergConverterIntrospection:
 
 class TestKreuzbergConverterOutputFormat:
     def test_markdown_output(self):
-        converter = KreuzbergConverter(output_format="markdown", batch=False)
+        converter = KreuzbergConverter(config=ExtractionConfig(output_format="markdown"), batch=False)
         result = converter.run(sources=[FIXTURES_DIR / "sample.html"])
         doc = result["documents"][0]
         assert doc.meta["output_format"] == "markdown"
 
     def test_html_output(self):
-        converter = KreuzbergConverter(output_format="html", batch=False)
+        converter = KreuzbergConverter(config=ExtractionConfig(output_format="html"), batch=False)
         result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
         doc = result["documents"][0]
         assert doc.meta["output_format"] == "html"
@@ -552,7 +494,7 @@ class TestKreuzbergConverterEdgeCases:
 
     def test_config_not_mutated_across_runs(self):
         config = ExtractionConfig(output_format="html")
-        converter = KreuzbergConverter(config=config, output_format="markdown", batch=False)
+        converter = KreuzbergConverter(config=config, batch=False)
         converter.run(sources=[FIXTURES_DIR / "sample.txt"])
         converter.run(sources=[FIXTURES_DIR / "sample.txt"])
         # Original config should not be mutated
