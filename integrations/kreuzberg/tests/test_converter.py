@@ -1130,6 +1130,75 @@ def test_per_page_mock_without_tables_removes_document_level_table_meta() -> Non
 
 
 # ======================================================================
+# Metadata mutation protection (deepcopy)
+# ======================================================================
+
+
+def test_deepcopy_per_page_nested_meta_not_shared() -> None:
+    """Nested mutable values in user_meta must not be shared across page documents."""
+    converter = KreuzbergConverter()
+    result = MagicMock()
+    result.pages = [
+        {"page_number": 1, "content": "Page 1", "is_blank": False, "tables": [], "images": []},
+        {"page_number": 2, "content": "Page 2", "is_blank": False, "tables": [], "images": []},
+    ]
+
+    user_meta = {"tags": ["original"]}
+    docs = converter._create_per_page_documents(
+        result, base_meta={}, source_meta={"file_path": "test.pdf"}, user_meta=user_meta,
+    )
+    assert len(docs) == 2
+
+    # Mutate one document's nested meta
+    docs[0].meta["tags"].append("mutated")
+
+    # Other document and original must be unaffected
+    assert docs[1].meta["tags"] == ["original"]
+    assert user_meta["tags"] == ["original"]
+
+
+def test_deepcopy_chunked_nested_meta_not_shared() -> None:
+    """Nested mutable values in user_meta must not be shared across chunk documents."""
+    converter = KreuzbergConverter()
+    result = MagicMock()
+    chunk1 = MagicMock()
+    chunk1.content = "chunk one"
+    chunk1.embedding = None
+    chunk2 = MagicMock()
+    chunk2.content = "chunk two"
+    chunk2.embedding = None
+    result.chunks = [chunk1, chunk2]
+
+    user_meta = {"tags": ["original"]}
+    docs = converter._create_chunked_documents(
+        result, base_meta={}, source_meta={"file_path": "test.pdf"}, user_meta=user_meta,
+    )
+    assert len(docs) == 2
+
+    docs[0].meta["tags"].append("mutated")
+
+    assert docs[1].meta["tags"] == ["original"]
+    assert user_meta["tags"] == ["original"]
+
+
+def test_deepcopy_unified_nested_meta_not_shared() -> None:
+    """Nested mutable values in user_meta must not be shared with caller's dict."""
+    converter = KreuzbergConverter()
+    result = _make_mock_result(content="hello")
+
+    bytestream = MagicMock()
+    bytestream.meta = {"file_path": "test.txt"}
+
+    user_meta = {"tags": ["original"]}
+    docs = converter._create_documents(result, bytestream, user_meta)
+    assert len(docs) == 1
+
+    docs[0].meta["tags"].append("mutated")
+
+    assert user_meta["tags"] == ["original"]
+
+
+# ======================================================================
 # Serialization helpers
 # ======================================================================
 

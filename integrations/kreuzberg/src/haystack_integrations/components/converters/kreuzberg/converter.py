@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import copy
 import tempfile
 from pathlib import Path
 from typing import Any, cast
@@ -432,7 +433,7 @@ class KreuzbergConverter:
 
         # Default: unified mode — one Document per source
         content = self._assemble_content(result.content, result.tables)
-        merged = {**base_meta, **source_meta, **user_meta}
+        merged = {**base_meta, **source_meta, **copy.deepcopy(user_meta)}
         return [Document(content=content, meta=merged)]
 
     def _create_per_page_documents(
@@ -476,7 +477,7 @@ class KreuzbergConverter:
             page_meta.pop("table_count", None) if not page_tables else None
             page_meta.pop("tables", None) if not page_tables else None
 
-            page_meta.update(user_meta)
+            page_meta.update(copy.deepcopy(user_meta))
             documents.append(Document(content=page_content, meta=page_meta))
 
         return documents
@@ -498,7 +499,7 @@ class KreuzbergConverter:
                 **source_meta,
                 "chunk_index": i,
                 "total_chunks": total_chunks,
-                **user_meta,
+                **copy.deepcopy(user_meta),
             }
             documents.append(
                 Document(
