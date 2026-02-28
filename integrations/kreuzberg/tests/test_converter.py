@@ -177,9 +177,7 @@ def test_serialization_from_dict_with_config_json_string() -> None:
 
 
 def test_serialization_from_dict_all_params() -> None:
-    config_json = config_to_json(
-        ExtractionConfig(output_format="html", ocr=OcrConfig(backend="tesseract"))
-    )
+    config_json = config_to_json(ExtractionConfig(output_format="html", ocr=OcrConfig(backend="tesseract")))
     d = {
         "type": "haystack_integrations.components.converters.kreuzberg.converter.KreuzbergConverter",
         "init_parameters": {
@@ -370,9 +368,7 @@ def test_extraction_single_pdf() -> None:
 
 def test_extraction_multiple_sources() -> None:
     converter = KreuzbergConverter(batch=False)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"]
-    )
+    result = converter.run(sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"])
     assert len(result["documents"]) == 2
     assert len(result["raw_extraction"]) == 2
 
@@ -405,9 +401,7 @@ def test_extraction_with_string_path() -> None:
 
 def test_extraction_nonexistent_file_skipped() -> None:
     converter = KreuzbergConverter(batch=False)
-    result = converter.run(
-        sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"]
-    )
+    result = converter.run(sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"])
     assert len(result["documents"]) == 1
     assert result["documents"][0].meta["file_path"] == "sample.txt"
 
@@ -514,18 +508,14 @@ def test_metadata_user_overrides_extraction() -> None:
 
 
 def test_per_page_produces_multiple_documents() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
-    )
+    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
     docs = result["documents"]
     assert len(docs) == 3  # 3-page PDF
 
 
 def test_per_page_document_metadata() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
-    )
+    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
     docs = result["documents"]
 
@@ -536,9 +526,7 @@ def test_per_page_document_metadata() -> None:
 
 
 def test_per_page_with_user_metadata() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
-    )
+    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
     result = converter.run(
         sources=[FIXTURES_DIR / "sample.pdf"],
         meta={"source": "test"},
@@ -548,9 +536,7 @@ def test_per_page_with_user_metadata() -> None:
 
 
 def test_per_page_raw_extraction_one_per_source() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
-    )
+    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
     # raw_extraction should have one entry per source, not per page
     assert len(result["raw_extraction"]) == 1
@@ -563,9 +549,7 @@ def test_per_page_raw_extraction_one_per_source() -> None:
 
 def test_batch_extraction() -> None:
     converter = KreuzbergConverter(batch=True)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"]
-    )
+    result = converter.run(sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"])
     assert len(result["documents"]) == 2
     assert len(result["raw_extraction"]) == 2
 
@@ -580,44 +564,15 @@ def test_batch_single_source_uses_sequential() -> None:
 def test_batch_with_bytestream() -> None:
     bs = ByteStream(data=b"Batch bytestream", mime_type="text/plain")
     converter = KreuzbergConverter(batch=True)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.txt", bs]
-    )
+    result = converter.run(sources=[FIXTURES_DIR / "sample.txt", bs])
     assert len(result["documents"]) == 2
 
 
 def test_batch_skips_failed_sources() -> None:
     converter = KreuzbergConverter(batch=True)
-    result = converter.run(
-        sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"]
-    )
+    result = converter.run(sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"])
     # nonexistent should be skipped, sample.txt should succeed
     assert len(result["documents"]) >= 1
-
-
-@patch(CONVERTER_MODULE + ".batch_extract_files_sync")
-def test_batch_file_fallback_on_exception(mock_batch: MagicMock) -> None:
-    """When batch file extraction fails, falls back to sequential."""
-    mock_batch.side_effect = RuntimeError("batch failed")
-    converter = KreuzbergConverter(batch=True)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"]
-    )
-    # Batch failed but sequential fallback should succeed for both
-    assert len(result["documents"]) == 2
-    assert len(result["raw_extraction"]) == 2
-
-
-@patch(CONVERTER_MODULE + ".batch_extract_bytes_sync")
-def test_batch_bytes_fallback_on_exception(mock_batch: MagicMock) -> None:
-    """When batch bytes extraction fails, falls back to sequential."""
-    mock_batch.side_effect = RuntimeError("batch failed")
-    bs1 = ByteStream(data=b"hello", mime_type="text/plain")
-    bs2 = ByteStream(data=b"world", mime_type="text/plain")
-    converter = KreuzbergConverter(batch=True)
-    result = converter.run(sources=[bs1, bs2])
-    assert len(result["documents"]) == 2
-    assert len(result["raw_extraction"]) == 2
 
 
 # ======================================================================
@@ -700,9 +655,7 @@ def test_raw_extraction_with_keywords() -> None:
 
 
 def test_raw_extraction_pages_when_per_page() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False
-    )
+    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
 
     raw = result["raw_extraction"][0]
@@ -876,17 +829,19 @@ def test_metadata_mock_processing_warnings() -> None:
 
 
 def test_metadata_mock_images_excludes_binary_data() -> None:
-    result = _make_mock_result(images=[
-        {
-            "format": "png",
-            "page_number": 1,
-            "width": 200,
-            "height": 100,
-            "description": "chart",
-            "image_index": 0,
-            "data": b"binary_data_here",
-        },
-    ])
+    result = _make_mock_result(
+        images=[
+            {
+                "format": "png",
+                "page_number": 1,
+                "width": 200,
+                "height": 100,
+                "description": "chart",
+                "image_index": 0,
+                "data": b"binary_data_here",
+            },
+        ]
+    )
 
     converter = KreuzbergConverter()
     meta = converter._build_extraction_metadata(result)
@@ -937,8 +892,17 @@ def test_metadata_mock_all_fields_populated() -> None:
     ann.page_number = 1
     result = _make_mock_result(
         processing_warnings=[warning],
-        images=[{"format": "jpeg", "page_number": 2, "width": 640, "height": 480,
-                 "description": None, "image_index": 0, "data": b"..."}],
+        images=[
+            {
+                "format": "jpeg",
+                "page_number": 2,
+                "width": 640,
+                "height": 480,
+                "description": None,
+                "image_index": 0,
+                "data": b"...",
+            }
+        ],
         annotations=[ann],
         quality_score=0.95,
         detected_languages=["en"],
@@ -1145,7 +1109,10 @@ def test_deepcopy_per_page_nested_meta_not_shared() -> None:
 
     user_meta = {"tags": ["original"]}
     docs = converter._create_per_page_documents(
-        result, base_meta={}, source_meta={"file_path": "test.pdf"}, user_meta=user_meta,
+        result,
+        base_meta={},
+        source_meta={"file_path": "test.pdf"},
+        user_meta=user_meta,
     )
     assert len(docs) == 2
 
@@ -1171,7 +1138,10 @@ def test_deepcopy_chunked_nested_meta_not_shared() -> None:
 
     user_meta = {"tags": ["original"]}
     docs = converter._create_chunked_documents(
-        result, base_meta={}, source_meta={"file_path": "test.pdf"}, user_meta=user_meta,
+        result,
+        base_meta={},
+        source_meta={"file_path": "test.pdf"},
+        user_meta=user_meta,
     )
     assert len(docs) == 2
 

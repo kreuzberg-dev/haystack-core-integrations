@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: 2026-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
-from __future__ import annotations
-
 import copy
 import tempfile
 from pathlib import Path
@@ -146,7 +144,7 @@ class KreuzbergConverter:
         )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> KreuzbergConverter:
+    def from_dict(cls, data: dict[str, Any]) -> "KreuzbergConverter":
         """
         Deserialize this component from a dictionary.
 
@@ -254,8 +252,8 @@ class KreuzbergConverter:
         """
         Extract content from multiple sources using kreuzberg's batch APIs.
 
-        Falls back to sequential extraction per source on batch failure.
-        Returns ``None`` for sources that failed extraction.
+        Returns ``None`` for sources that were skipped (e.g. unreadable).
+        Exceptions from batch extraction are propagated to the caller.
         """
         file_indices: list[int] = []
         file_paths: list[str | Path] = []
@@ -276,39 +274,17 @@ class KreuzbergConverter:
 
         # Batch-extract file paths
         if file_paths:
-            try:
-                file_results = batch_extract_files_sync(
-                    file_paths, config=config, easyocr_kwargs=self.easyocr_kwargs
-                )
-                for idx, result in zip(file_indices, file_results):
-                    results[idx] = result
-            except Exception:
-                logger.warning("Batch file extraction failed. Falling back to sequential extraction.")
-                for idx, path in zip(file_indices, file_paths):
-                    try:
-                        results[idx] = extract_file_sync(
-                            path, config=config, easyocr_kwargs=self.easyocr_kwargs
-                        )
-                    except Exception as e:
-                        self._log_extraction_error(path, e)
+            file_results = batch_extract_files_sync(file_paths, config=config, easyocr_kwargs=self.easyocr_kwargs)
+            for idx, result in zip(file_indices, file_results, strict=True):
+                results[idx] = result
 
         # Batch-extract byte streams
         if bytes_data:
-            try:
-                bytes_results = batch_extract_bytes_sync(
-                    bytes_data, bytes_mimes, config=config, easyocr_kwargs=self.easyocr_kwargs
-                )
-                for idx, result in zip(bytes_indices, bytes_results):
-                    results[idx] = result
-            except Exception:
-                logger.warning("Batch bytes extraction failed. Falling back to sequential extraction.")
-                for idx, data, mime in zip(bytes_indices, bytes_data, bytes_mimes):
-                    try:
-                        results[idx] = extract_bytes_sync(
-                            data, mime_type=mime, config=config, easyocr_kwargs=self.easyocr_kwargs
-                        )
-                    except Exception as e:
-                        self._log_extraction_error(sources[idx], e)
+            bytes_results = batch_extract_bytes_sync(
+                bytes_data, bytes_mimes, config=config, easyocr_kwargs=self.easyocr_kwargs
+            )
+            for idx, result in zip(bytes_indices, bytes_results, strict=True):
+                results[idx] = result
 
         return results
 
@@ -324,11 +300,11 @@ class KreuzbergConverter:
         None values are filtered out.
         """
         # Flatten kreuzberg document metadata (format-specific TypedDict)
-        meta: dict[str, Any] = {
-            k: v
-            for k, v in result.metadata.items()
-            if v is not None and k not in _METADATA_OVERLAP_KEYS
-        } if result.metadata else {}
+        meta: dict[str, Any] = (
+            {k: v for k, v in result.metadata.items() if v is not None and k not in _METADATA_OVERLAP_KEYS}
+            if result.metadata
+            else {}
+        )
 
         # Quality score
         if result.quality_score is not None:
@@ -345,8 +321,7 @@ class KreuzbergConverter:
         # Extracted keywords
         if result.extracted_keywords:
             meta["extracted_keywords"] = [
-                {"text": kw.text, "score": kw.score, "algorithm": kw.algorithm}
-                for kw in result.extracted_keywords
+                {"text": kw.text, "score": kw.score, "algorithm": kw.algorithm} for kw in result.extracted_keywords
             ]
 
         # Output format tracking
@@ -458,8 +433,12 @@ class KreuzbergConverter:
                 if table_blocks:
                     page_content = page_content + "\n\n" + "\n\n".join(table_blocks)
 
-            page_meta: dict[str, Any] = {**base_meta, **source_meta, "page_number": page.get("page_number"),
-                                         "is_blank": page.get("is_blank", False)}
+            page_meta: dict[str, Any] = {
+                **base_meta,
+                **source_meta,
+                "page_number": page.get("page_number"),
+                "is_blank": page.get("is_blank", False),
+            }
 
             if page_tables:
                 page_meta["table_count"] = len(page_tables)
@@ -545,8 +524,7 @@ class KreuzbergConverter:
 
         if result.extracted_keywords:
             raw["extracted_keywords"] = [
-                {"text": kw.text, "score": kw.score, "algorithm": kw.algorithm}
-                for kw in result.extracted_keywords
+                {"text": kw.text, "score": kw.score, "algorithm": kw.algorithm} for kw in result.extracted_keywords
             ]
 
         if result.annotations:
@@ -564,16 +542,10 @@ class KreuzbergConverter:
             ]
 
         if result.chunks:
-            raw["chunks"] = [
-                {"content": c.content, "metadata": c.metadata}
-                for c in result.chunks
-            ]
+            raw["chunks"] = [{"content": c.content, "metadata": c.metadata} for c in result.chunks]
 
         if result.images:
-            raw["images"] = [
-                {k: v for k, v in img.items() if k != "data"}
-                for img in result.images
-            ]
+            raw["images"] = [{k: v for k, v in img.items() if k != "data"} for img in result.images]
 
         return raw
 
@@ -592,8 +564,7 @@ class KreuzbergConverter:
             details = get_error_details()
             code_name = error_code_name(error_code) if error_code is not None else "UNKNOWN"
             logger.warning(
-                "Could not convert {source} to Document. "
-                "Error code: {code} ({name}). Details: {details}. Skipping it.",
+                "Could not convert {source} to Document. Error code: {code} ({name}). Details: {details}. Skipping it.",
                 source=source,
                 code=error_code,
                 name=code_name,
@@ -645,8 +616,7 @@ class KreuzbergConverter:
         """
         # Expand directories
         has_dirs = any(
-            isinstance(s, (str, Path)) and not isinstance(s, ByteStream) and Path(s).is_dir()
-            for s in sources
+            isinstance(s, (str, Path)) and not isinstance(s, ByteStream) and Path(s).is_dir() for s in sources
         )
         if has_dirs and isinstance(meta, list):
             msg = (
@@ -725,9 +695,7 @@ class KreuzbergConverter:
 
         results = self._extract_batch(sources, config)
 
-        for source, result, bytestream, user_meta in zip(
-            sources, results, bytestreams, meta_list, strict=True
-        ):
+        for _source, result, bytestream, user_meta in zip(sources, results, bytestreams, meta_list, strict=True):
             if result is None or bytestream is None:
                 continue
 
@@ -782,17 +750,21 @@ def _serialize_page_tables(tables: list[Any]) -> list[dict[str, Any]]:
     serialized = []
     for t in tables:
         if isinstance(t, dict):
-            serialized.append({
-                "cells": t.get("cells"),
-                "markdown": t.get("markdown"),
-                "page_number": t.get("page_number"),
-            })
+            serialized.append(
+                {
+                    "cells": t.get("cells"),
+                    "markdown": t.get("markdown"),
+                    "page_number": t.get("page_number"),
+                }
+            )
         else:
-            serialized.append({
-                "cells": t.cells,
-                "markdown": t.markdown,
-                "page_number": t.page_number,
-            })
+            serialized.append(
+                {
+                    "cells": t.cells,
+                    "markdown": t.markdown,
+                    "page_number": t.page_number,
+                }
+            )
     return serialized
 
 
@@ -814,11 +786,13 @@ def _serialize_annotations(annotations: list[Any]) -> list[dict[str, Any]]:
         if isinstance(ann, dict):
             serialized.append(dict(ann))
         else:
-            serialized.append({
-                "type": getattr(ann, "annotation_type", None),
-                "content": getattr(ann, "content", None),
-                "page_number": getattr(ann, "page_number", None),
-            })
+            serialized.append(
+                {
+                    "type": getattr(ann, "annotation_type", None),
+                    "content": getattr(ann, "content", None),
+                    "page_number": getattr(ann, "page_number", None),
+                }
+            )
     return serialized
 
 
