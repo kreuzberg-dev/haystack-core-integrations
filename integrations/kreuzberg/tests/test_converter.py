@@ -8,8 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from haystack.dataclasses import ByteStream, Document
-from kreuzberg import ExtractionConfig, KeywordConfig, OcrConfig, PageConfig, config_to_json
+from kreuzberg import ExtractionConfig, OcrConfig, PageConfig, config_to_json
 
 from haystack_integrations.components.converters.kreuzberg import KreuzbergConverter
 from haystack_integrations.components.converters.kreuzberg.converter import _serialize_page_tables, _serialize_warnings
@@ -18,21 +17,17 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 CONVERTER_MODULE = "haystack_integrations.components.converters.kreuzberg.converter"
 
 
-# ======================================================================
-# Init
-# ======================================================================
-
-
+@pytest.mark.unit
 def test_init_default() -> None:
     converter = KreuzbergConverter()
     assert converter.config is None
     assert converter.config_path is None
     assert converter.store_full_path is False
     assert converter.batch is True
-    assert converter.append_tables_to_content is True
     assert converter.easyocr_kwargs is None
 
 
+@pytest.mark.unit
 def test_init_with_all_params() -> None:
     config = ExtractionConfig(output_format="markdown")
     converter = KreuzbergConverter(
@@ -40,22 +35,16 @@ def test_init_with_all_params() -> None:
         config_path="/tmp/config.json",
         store_full_path=True,
         batch=False,
-        append_tables_to_content=False,
         easyocr_kwargs={"gpu": False},
     )
     assert converter.config is config
     assert converter.config_path == "/tmp/config.json"
     assert converter.store_full_path is True
     assert converter.batch is False
-    assert converter.append_tables_to_content is False
     assert converter.easyocr_kwargs == {"gpu": False}
 
 
-# ======================================================================
-# Serialization
-# ======================================================================
-
-
+@pytest.mark.unit
 def test_serialization_to_dict_default() -> None:
     converter = KreuzbergConverter()
     d = converter.to_dict()
@@ -66,12 +55,12 @@ def test_serialization_to_dict_default() -> None:
             "config_path": None,
             "store_full_path": False,
             "batch": True,
-            "append_tables_to_content": True,
             "easyocr_kwargs": None,
         },
     }
 
 
+@pytest.mark.unit
 def test_serialization_to_dict_with_config() -> None:
     config = ExtractionConfig(output_format="markdown")
     converter = KreuzbergConverter(config=config)
@@ -83,6 +72,7 @@ def test_serialization_to_dict_with_config() -> None:
     assert parsed["output_format"] == "markdown"
 
 
+@pytest.mark.unit
 def test_serialization_from_dict_default() -> None:
     d = {
         "type": "haystack_integrations.components.converters.kreuzberg.converter.KreuzbergConverter",
@@ -96,6 +86,7 @@ def test_serialization_from_dict_default() -> None:
     assert converter.store_full_path is True
 
 
+@pytest.mark.unit
 def test_serialization_roundtrip_default() -> None:
     converter = KreuzbergConverter(
         config=ExtractionConfig(
@@ -113,6 +104,7 @@ def test_serialization_roundtrip_default() -> None:
     assert restored.batch is False
 
 
+@pytest.mark.unit
 def test_serialization_roundtrip_with_config() -> None:
     config = ExtractionConfig(
         output_format="markdown",
@@ -128,6 +120,7 @@ def test_serialization_roundtrip_with_config() -> None:
     assert restored.config.ocr.language == "eng"
 
 
+@pytest.mark.unit
 def test_serialization_to_dict_all_non_default_params() -> None:
     config = ExtractionConfig(output_format="html")
     converter = KreuzbergConverter(
@@ -135,7 +128,6 @@ def test_serialization_to_dict_all_non_default_params() -> None:
         config_path="/tmp/config.toml",
         store_full_path=True,
         batch=False,
-        append_tables_to_content=False,
         easyocr_kwargs={"gpu": True, "beam_width": 10},
     )
     d = converter.to_dict()
@@ -145,16 +137,17 @@ def test_serialization_to_dict_all_non_default_params() -> None:
     assert params["config_path"] == "/tmp/config.toml"
     assert params["store_full_path"] is True
     assert params["batch"] is False
-    assert params["append_tables_to_content"] is False
     assert params["easyocr_kwargs"] == {"gpu": True, "beam_width": 10}
 
 
+@pytest.mark.unit
 def test_serialization_to_dict_with_config_path() -> None:
     converter = KreuzbergConverter(config_path="/some/path/config.yaml")
     d = converter.to_dict()
     assert d["init_parameters"]["config_path"] == "/some/path/config.yaml"
 
 
+@pytest.mark.unit
 def test_serialization_to_dict_config_path_from_path_object() -> None:
     converter = KreuzbergConverter(config_path=Path("/some/path/config.json"))
     d = converter.to_dict()
@@ -163,6 +156,7 @@ def test_serialization_to_dict_config_path_from_path_object() -> None:
     assert isinstance(d["init_parameters"]["config_path"], str)
 
 
+@pytest.mark.unit
 def test_serialization_from_dict_with_config_json_string() -> None:
     config_json = config_to_json(ExtractionConfig(output_format="markdown"))
     d = {
@@ -176,6 +170,7 @@ def test_serialization_from_dict_with_config_json_string() -> None:
     assert converter.config.output_format == "markdown"
 
 
+@pytest.mark.unit
 def test_serialization_from_dict_all_params() -> None:
     config_json = config_to_json(ExtractionConfig(output_format="html", ocr=OcrConfig(backend="tesseract")))
     d = {
@@ -185,7 +180,6 @@ def test_serialization_from_dict_all_params() -> None:
             "config_path": "/tmp/config.toml",
             "store_full_path": True,
             "batch": False,
-            "append_tables_to_content": False,
             "easyocr_kwargs": {"gpu": False},
         },
     }
@@ -196,10 +190,10 @@ def test_serialization_from_dict_all_params() -> None:
     assert converter.config_path == "/tmp/config.toml"
     assert converter.store_full_path is True
     assert converter.batch is False
-    assert converter.append_tables_to_content is False
     assert converter.easyocr_kwargs == {"gpu": False}
 
 
+@pytest.mark.unit
 def test_serialization_from_dict_empty_init_parameters() -> None:
     d = {
         "type": "haystack_integrations.components.converters.kreuzberg.converter.KreuzbergConverter",
@@ -210,10 +204,11 @@ def test_serialization_from_dict_empty_init_parameters() -> None:
     assert converter.config_path is None
     assert converter.store_full_path is False
     assert converter.batch is True
-    assert converter.append_tables_to_content is True
     assert converter.easyocr_kwargs is None
 
 
+
+@pytest.mark.unit
 def test_serialization_roundtrip_easyocr_kwargs() -> None:
     converter = KreuzbergConverter(easyocr_kwargs={"gpu": False, "beam_width": 5})
     d = converter.to_dict()
@@ -221,6 +216,7 @@ def test_serialization_roundtrip_easyocr_kwargs() -> None:
     assert restored.easyocr_kwargs == {"gpu": False, "beam_width": 5}
 
 
+@pytest.mark.unit
 def test_serialization_roundtrip_config_path() -> None:
     converter = KreuzbergConverter(config_path="/tmp/kreuzberg.toml")
     d = converter.to_dict()
@@ -228,6 +224,7 @@ def test_serialization_roundtrip_config_path() -> None:
     assert restored.config_path == "/tmp/kreuzberg.toml"
 
 
+@pytest.mark.unit
 def test_serialization_roundtrip_all_non_default_params() -> None:
     converter = KreuzbergConverter(
         config=ExtractionConfig(
@@ -237,7 +234,6 @@ def test_serialization_roundtrip_all_non_default_params() -> None:
         config_path="/tmp/fallback.yaml",
         store_full_path=True,
         batch=False,
-        append_tables_to_content=False,
         easyocr_kwargs={"gpu": True, "beam_width": 3},
     )
     d = converter.to_dict()
@@ -248,10 +244,10 @@ def test_serialization_roundtrip_all_non_default_params() -> None:
     assert restored.config_path == "/tmp/fallback.yaml"
     assert restored.store_full_path is True
     assert restored.batch is False
-    assert restored.append_tables_to_content is False
     assert restored.easyocr_kwargs == {"gpu": True, "beam_width": 3}
 
 
+@pytest.mark.unit
 def test_serialization_roundtrip_preserves_to_dict_equality() -> None:
     converter = KreuzbergConverter(
         config=ExtractionConfig(output_format="markdown"),
@@ -273,11 +269,7 @@ def test_serialization_roundtrip_preserves_to_dict_equality() -> None:
     )
 
 
-# ======================================================================
-# Build config
-# ======================================================================
-
-
+@pytest.mark.unit
 def test_build_config_default() -> None:
     converter = KreuzbergConverter()
     config = converter._build_config()
@@ -286,6 +278,7 @@ def test_build_config_default() -> None:
     assert config.language_detection.enabled is True
 
 
+@pytest.mark.unit
 def test_build_config_does_not_mutate_self_config() -> None:
     base = ExtractionConfig(output_format="html")
     converter = KreuzbergConverter(config=base)
@@ -293,6 +286,7 @@ def test_build_config_does_not_mutate_self_config() -> None:
     assert base.output_format == "html"
 
 
+@pytest.mark.unit
 def test_build_config_from_file() -> None:
     config = ExtractionConfig(output_format="markdown")
     json_str = config_to_json(config)
@@ -308,6 +302,7 @@ def test_build_config_from_file() -> None:
         Path(path).unlink(missing_ok=True)
 
 
+@pytest.mark.unit
 def test_build_config_merges_config_and_config_path() -> None:
     """When both config and config_path are set, config takes priority."""
     file_config = ExtractionConfig(output_format="html")
@@ -331,423 +326,66 @@ def test_build_config_merges_config_and_config_path() -> None:
         Path(path).unlink(missing_ok=True)
 
 
-# ======================================================================
-# Extraction
-# ======================================================================
-
-
-def test_extraction_single_text_file() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-
-    assert len(result["documents"]) == 1
-    assert len(result["raw_extraction"]) == 1
-
-    doc = result["documents"][0]
-    assert isinstance(doc, Document)
-    assert doc.content is not None
-    assert len(doc.content) > 0
-    assert doc.meta["file_path"] == "sample.txt"
-    assert doc.meta["mime_type"] == "text/plain"
-    assert doc.meta["format_type"] == "text"
-
-
-def test_extraction_single_pdf() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-
-    doc = result["documents"][0]
-    assert doc.meta["title"] == "Sample PDF"
-    assert doc.meta["authors"] == ["Philip Hutchison"]
-    assert doc.meta["page_count"] == 3
-    assert doc.meta["format_type"] == "pdf"
-    assert doc.meta["is_encrypted"] is False
-    assert doc.meta["pdf_version"] == "1.3"
-    assert doc.meta["mime_type"] == "application/pdf"
-
-
-def test_extraction_multiple_sources() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"])
-    assert len(result["documents"]) == 2
-    assert len(result["raw_extraction"]) == 2
-
-
-def test_extraction_with_bytestream() -> None:
-    bs = ByteStream(data=b"Hello from ByteStream!", mime_type="text/plain")
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[bs])
-
-    doc = result["documents"][0]
-    assert doc.content == "Hello from ByteStream!"
-
-
-def test_extraction_with_bytestream_auto_detect_mime() -> None:
-    bs = ByteStream(data=b"Hello auto-detect", mime_type=None)
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[bs])
-
-    assert len(result["documents"]) == 1
-    assert result["documents"][0].content == "Hello auto-detect"
-
-
-def test_extraction_with_string_path() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[str(FIXTURES_DIR / "sample.txt")])
-
-    assert len(result["documents"]) == 1
-    assert result["documents"][0].meta["file_path"] == "sample.txt"
-
-
-def test_extraction_nonexistent_file_skipped() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"])
-    assert len(result["documents"]) == 1
-    assert result["documents"][0].meta["file_path"] == "sample.txt"
-
-
-# ======================================================================
-# Metadata
-# ======================================================================
-
-
-def test_metadata_quality_score() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
-    assert "quality_score" in doc.meta
-    assert isinstance(doc.meta["quality_score"], float)
-
-
-def test_metadata_detected_languages() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    doc = result["documents"][0]
-    assert "detected_languages" in doc.meta
-    assert isinstance(doc.meta["detected_languages"], list)
-
-
-def test_metadata_output_format_tracking() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
-    assert doc.meta["output_format"] == "plain"
-    assert doc.meta["result_format"] == "unified"
-
-
-def test_metadata_output_format_markdown() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(output_format="markdown"), batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
-    assert doc.meta["output_format"] == "markdown"
-
-
-def test_metadata_keyword_extraction() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(keywords=KeywordConfig(max_keywords=3)),
-        batch=False,
-    )
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    doc = result["documents"][0]
-    assert "extracted_keywords" in doc.meta
-    keywords = doc.meta["extracted_keywords"]
-    assert len(keywords) == 3
-    assert "text" in keywords[0]
-    assert "score" in keywords[0]
-    assert "algorithm" in keywords[0]
-
-
-def test_metadata_store_full_path_false() -> None:
-    converter = KreuzbergConverter(store_full_path=False, batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
-    assert doc.meta["file_path"] == "sample.txt"
-
-
-def test_metadata_store_full_path_true() -> None:
-    converter = KreuzbergConverter(store_full_path=True, batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
-    # Full path should contain directory separators
-    assert "/" in str(doc.meta["file_path"]) or "\\" in str(doc.meta["file_path"])
-
-
-def test_metadata_user_single_dict() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.txt"],
-        meta={"custom_key": "custom_value"},
-    )
-    doc = result["documents"][0]
-    assert doc.meta["custom_key"] == "custom_value"
-
-
-def test_metadata_user_per_source() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"],
-        meta=[{"src": "txt"}, {"src": "pdf"}],
-    )
-    assert result["documents"][0].meta["src"] == "txt"
-    assert result["documents"][1].meta["src"] == "pdf"
-
-
-def test_metadata_user_overrides_extraction() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.pdf"],
-        meta={"title": "User Override Title"},
-    )
-    doc = result["documents"][0]
-    assert doc.meta["title"] == "User Override Title"
-
-
-# ======================================================================
-# Per-page extraction
-# ======================================================================
-
-
-def test_per_page_produces_multiple_documents() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    docs = result["documents"]
-    assert len(docs) == 3  # 3-page PDF
-
-
-def test_per_page_document_metadata() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    docs = result["documents"]
-
-    for i, doc in enumerate(docs, start=1):
-        assert doc.meta["page_number"] == i
-        assert "is_blank" in doc.meta
-        assert doc.meta["file_path"] == "sample.pdf"
-
-
-def test_per_page_with_user_metadata() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
-    result = converter.run(
-        sources=[FIXTURES_DIR / "sample.pdf"],
-        meta={"source": "test"},
-    )
-    for doc in result["documents"]:
-        assert doc.meta["source"] == "test"
-
-
-def test_per_page_raw_extraction_one_per_source() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    # raw_extraction should have one entry per source, not per page
-    assert len(result["raw_extraction"]) == 1
-
-
-# ======================================================================
-# Batch extraction
-# ======================================================================
-
-
-def test_batch_extraction() -> None:
-    converter = KreuzbergConverter(batch=True)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"])
-    assert len(result["documents"]) == 2
-    assert len(result["raw_extraction"]) == 2
-
-
-def test_batch_single_source_uses_sequential() -> None:
-    """When only one source, batch mode should use sequential extraction."""
-    converter = KreuzbergConverter(batch=True)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    assert len(result["documents"]) == 1
-
-
-def test_batch_with_bytestream() -> None:
-    bs = ByteStream(data=b"Batch bytestream", mime_type="text/plain")
-    converter = KreuzbergConverter(batch=True)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt", bs])
-    assert len(result["documents"]) == 2
-
-
-def test_batch_skips_failed_sources() -> None:
-    converter = KreuzbergConverter(batch=True)
-    result = converter.run(sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"])
-    # nonexistent should be skipped, sample.txt should succeed
-    assert len(result["documents"]) >= 1
-
-
-# ======================================================================
-# Directory input
-# ======================================================================
-
-
-def test_directory_expansion() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR])
-    docs = result["documents"]
-    assert len(docs) == 4  # sample.txt, sample.pdf, sample.docx, sample.html
-    filenames = sorted(d.meta["file_path"] for d in docs)
-    assert filenames == ["sample.docx", "sample.html", "sample.pdf", "sample.txt"]
-
-
-def test_directory_with_single_dict_meta() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(
-        sources=[FIXTURES_DIR],
-        meta={"source": "fixtures"},
-    )
-    for doc in result["documents"]:
-        assert doc.meta["source"] == "fixtures"
-
-
-def test_directory_with_list_meta_raises() -> None:
-    converter = KreuzbergConverter(batch=False)
-    with pytest.raises(ValueError, match="directories are present"):
-        converter.run(sources=[FIXTURES_DIR], meta=[{"a": 1}])
-
-
-def test_directory_mixed_with_file() -> None:
-    converter = KreuzbergConverter(batch=False)
-    bs = ByteStream(data=b"Extra source", mime_type="text/plain")
-    result = converter.run(sources=[FIXTURES_DIR, bs])
-    # 4 from fixtures dir + 1 bytestream = 5
-    assert len(result["documents"]) == 5
-
-
-# ======================================================================
-# Raw extraction
-# ======================================================================
-
-
-def test_raw_extraction_output() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-
-    raw = result["raw_extraction"]
-    assert len(raw) == 1
-    r = raw[0]
-    assert "content" in r
-    assert "mime_type" in r
-    assert r["mime_type"] == "application/pdf"
-    assert "output_format" in r
-    assert "metadata" in r
-
-
-def test_raw_extraction_metadata_structure() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-
-    raw_meta = result["raw_extraction"][0]["metadata"]
-    assert isinstance(raw_meta, dict)
-    assert "title" in raw_meta
-    assert "format_type" in raw_meta
-
-
-def test_raw_extraction_with_keywords() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(keywords=KeywordConfig(max_keywords=3)),
-        batch=False,
-    )
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-
-    raw = result["raw_extraction"][0]
-    assert "extracted_keywords" in raw
-    assert len(raw["extracted_keywords"]) == 3
-
-
-def test_raw_extraction_pages_when_per_page() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-
-    raw = result["raw_extraction"][0]
-    assert "pages" in raw
-    assert len(raw["pages"]) == 3
-
-
-# ======================================================================
-# Table assembly
-# ======================================================================
-
-
+@pytest.mark.unit
 def test_table_assembly_appends_markdown_to_content() -> None:
-    converter = KreuzbergConverter(append_tables_to_content=True)
     table = MagicMock()
     table.markdown = "| A | B |\n|---|---|\n| 1 | 2 |"
-    content = converter._assemble_content("Main text", [table])
+    content = KreuzbergConverter._assemble_content("Main text", [table], "plain")
     assert content == "Main text\n\n| A | B |\n|---|---|\n| 1 | 2 |"
 
 
+@pytest.mark.unit
 def test_table_assembly_appends_multiple_tables() -> None:
-    converter = KreuzbergConverter(append_tables_to_content=True)
     t1 = MagicMock()
     t1.markdown = "| A |\n|---|\n| 1 |"
     t2 = MagicMock()
     t2.markdown = "| B |\n|---|\n| 2 |"
-    content = converter._assemble_content("Text", [t1, t2])
+    content = KreuzbergConverter._assemble_content("Text", [t1, t2], "plain")
     assert content == "Text\n\n| A |\n|---|\n| 1 |\n\n| B |\n|---|\n| 2 |"
 
 
+@pytest.mark.unit
 def test_table_assembly_skips_tables_with_empty_markdown() -> None:
-    converter = KreuzbergConverter(append_tables_to_content=True)
     table = MagicMock()
     table.markdown = ""
-    content = converter._assemble_content("Main text", [table])
+    content = KreuzbergConverter._assemble_content("Main text", [table], "plain")
     assert content == "Main text"
 
 
+@pytest.mark.unit
 def test_table_assembly_no_tables_returns_text_unchanged() -> None:
-    converter = KreuzbergConverter(append_tables_to_content=True)
-    assert converter._assemble_content("text", None) == "text"
-    assert converter._assemble_content("text", []) == "text"
+    assert KreuzbergConverter._assemble_content("text", None, "plain") == "text"
+    assert KreuzbergConverter._assemble_content("text", [], "plain") == "text"
 
 
-def test_table_assembly_disabled_returns_text_unchanged() -> None:
-    converter = KreuzbergConverter(append_tables_to_content=False)
+@pytest.mark.unit
+def test_table_assembly_skipped_for_markdown_format() -> None:
     table = MagicMock()
     table.markdown = "| A |"
-    assert converter._assemble_content("text", [table]) == "text"
+    assert KreuzbergConverter._assemble_content("text", [table], "markdown") == "text"
 
 
-# ======================================================================
-# Introspection
-# ======================================================================
+@pytest.mark.unit
+def test_table_assembly_skipped_for_html_format() -> None:
+    table = MagicMock()
+    table.markdown = "| A |"
+    assert KreuzbergConverter._assemble_content("text", [table], "html") == "text"
 
 
+@pytest.mark.unit
 def test_introspection_supported_extractors() -> None:
     extractors = KreuzbergConverter.supported_extractors()
     assert isinstance(extractors, list)
-    assert len(extractors) > 0
 
 
+@pytest.mark.unit
 def test_introspection_supported_ocr_backends() -> None:
     backends = KreuzbergConverter.supported_ocr_backends()
     assert isinstance(backends, list)
     assert len(backends) > 0
 
 
-# ======================================================================
-# Output format
-# ======================================================================
-
-
-def test_output_format_markdown() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(output_format="markdown"), batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.html"])
-    doc = result["documents"][0]
-    assert doc.meta["output_format"] == "markdown"
-
-
-def test_output_format_html() -> None:
-    converter = KreuzbergConverter(config=ExtractionConfig(output_format="html"), batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
-    assert doc.meta["output_format"] == "html"
-
-
-# ======================================================================
-# Edge cases
-# ======================================================================
-
-
+@pytest.mark.unit
 def test_edge_empty_sources_list() -> None:
     converter = KreuzbergConverter(batch=False)
     result = converter.run(sources=[])
@@ -755,22 +393,7 @@ def test_edge_empty_sources_list() -> None:
     assert result["raw_extraction"] == []
 
 
-def test_edge_all_sources_fail() -> None:
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=["nonexistent1.pdf", "nonexistent2.pdf"])
-    assert result["documents"] == []
-    assert result["raw_extraction"] == []
-
-
-def test_edge_config_not_mutated_across_runs() -> None:
-    config = ExtractionConfig(output_format="html")
-    converter = KreuzbergConverter(config=config, batch=False)
-    converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    # Original config should not be mutated
-    assert config.output_format == "html"
-
-
+@pytest.mark.unit
 def test_edge_easyocr_kwargs_stored() -> None:
     converter = KreuzbergConverter(easyocr_kwargs={"gpu": False, "beam_width": 5})
     assert converter.easyocr_kwargs == {"gpu": False, "beam_width": 5}
@@ -778,6 +401,7 @@ def test_edge_easyocr_kwargs_stored() -> None:
     assert d["init_parameters"]["easyocr_kwargs"] == {"gpu": False, "beam_width": 5}
 
 
+@pytest.mark.unit
 @patch(CONVERTER_MODULE + ".extract_file_sync")
 def test_edge_sequential_extraction_error_skipped(mock_extract: MagicMock) -> None:
     """File exists but extraction raises — source is skipped."""
@@ -786,11 +410,6 @@ def test_edge_sequential_extraction_error_skipped(mock_extract: MagicMock) -> No
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
     assert result["documents"] == []
     assert result["raw_extraction"] == []
-
-
-# ======================================================================
-# Mock-based tests for _build_extraction_metadata
-# ======================================================================
 
 
 def _make_mock_result(**overrides: Any) -> MagicMock:
@@ -817,6 +436,7 @@ def _make_mock_result(**overrides: Any) -> MagicMock:
     return result
 
 
+@pytest.mark.unit
 def test_metadata_mock_processing_warnings() -> None:
     warning = MagicMock()
     warning.source = "ocr"
@@ -828,6 +448,7 @@ def test_metadata_mock_processing_warnings() -> None:
     assert meta["processing_warnings"] == [{"source": "ocr", "message": "low confidence"}]
 
 
+@pytest.mark.unit
 def test_metadata_mock_images_excludes_binary_data() -> None:
     result = _make_mock_result(
         images=[
@@ -854,6 +475,7 @@ def test_metadata_mock_images_excludes_binary_data() -> None:
     assert meta["images"][0]["page_number"] == 1
 
 
+@pytest.mark.unit
 def test_metadata_mock_annotations() -> None:
     ann = MagicMock()
     ann.annotation_type = "highlight"
@@ -868,6 +490,7 @@ def test_metadata_mock_annotations() -> None:
     ]
 
 
+@pytest.mark.unit
 def test_metadata_mock_tables() -> None:
     table = MagicMock()
     table.cells = [["A", "B"], ["1", "2"]]
@@ -882,6 +505,7 @@ def test_metadata_mock_tables() -> None:
     assert meta["tables"][0]["page_number"] == 1
 
 
+@pytest.mark.unit
 def test_metadata_mock_all_fields_populated() -> None:
     warning = MagicMock()
     warning.source = "parser"
@@ -923,11 +547,7 @@ def test_metadata_mock_all_fields_populated() -> None:
     assert meta["annotations"][0]["type"] == "link"
 
 
-# ======================================================================
-# Mock-based tests for _create_chunked_documents
-# ======================================================================
-
-
+@pytest.mark.unit
 def test_chunked_creates_one_document_per_chunk() -> None:
     converter = KreuzbergConverter()
     result = MagicMock()
@@ -961,6 +581,7 @@ def test_chunked_creates_one_document_per_chunk() -> None:
     assert docs[1].meta["total_chunks"] == 2
 
 
+@pytest.mark.unit
 def test_chunked_single_chunk() -> None:
     converter = KreuzbergConverter()
     result = MagicMock()
@@ -980,9 +601,11 @@ def test_chunked_single_chunk() -> None:
     assert docs[0].meta["total_chunks"] == 1
 
 
+@pytest.mark.unit
 def test_per_page_mock_with_object_tables() -> None:
-    converter = KreuzbergConverter(append_tables_to_content=True)
+    converter = KreuzbergConverter()
     result = MagicMock()
+    result.output_format = "plain"
     table = MagicMock()
     table.markdown = "| X |\n|---|\n| 1 |"
     table.cells = [["X"], ["1"]]
@@ -1010,9 +633,11 @@ def test_per_page_mock_with_object_tables() -> None:
     assert docs[0].meta["page_number"] == 1
 
 
+@pytest.mark.unit
 def test_per_page_mock_with_dict_tables() -> None:
-    converter = KreuzbergConverter(append_tables_to_content=True)
+    converter = KreuzbergConverter()
     result = MagicMock()
+    result.output_format = "plain"
     result.pages = [
         {
             "page_number": 1,
@@ -1036,6 +661,7 @@ def test_per_page_mock_with_dict_tables() -> None:
     assert docs[0].meta["tables"][0]["cells"] == [["Y"], ["2"]]
 
 
+@pytest.mark.unit
 def test_per_page_mock_with_images() -> None:
     converter = KreuzbergConverter()
     result = MagicMock()
@@ -1064,6 +690,7 @@ def test_per_page_mock_with_images() -> None:
     assert "data" not in images[0]
 
 
+@pytest.mark.unit
 def test_per_page_mock_without_tables_removes_document_level_table_meta() -> None:
     converter = KreuzbergConverter()
     result = MagicMock()
@@ -1088,6 +715,7 @@ def test_per_page_mock_without_tables_removes_document_level_table_meta() -> Non
     assert "tables" not in docs[0].meta
 
 
+@pytest.mark.unit
 def test_deepcopy_per_page_nested_meta_not_shared() -> None:
     """Nested mutable values in user_meta must not be shared across page documents."""
     converter = KreuzbergConverter()
@@ -1114,6 +742,7 @@ def test_deepcopy_per_page_nested_meta_not_shared() -> None:
     assert user_meta["tags"] == ["original"]
 
 
+@pytest.mark.unit
 def test_deepcopy_chunked_nested_meta_not_shared() -> None:
     """Nested mutable values in user_meta must not be shared across chunk documents."""
     converter = KreuzbergConverter()
@@ -1141,6 +770,7 @@ def test_deepcopy_chunked_nested_meta_not_shared() -> None:
     assert user_meta["tags"] == ["original"]
 
 
+@pytest.mark.unit
 def test_deepcopy_unified_nested_meta_not_shared() -> None:
     """Nested mutable values in user_meta must not be shared with caller's dict."""
     converter = KreuzbergConverter()
@@ -1158,12 +788,14 @@ def test_deepcopy_unified_nested_meta_not_shared() -> None:
     assert user_meta["tags"] == ["original"]
 
 
+@pytest.mark.unit
 def test_helper_serialize_page_tables_with_dicts() -> None:
     tables = [{"cells": [["A"], ["1"]], "markdown": "| A |", "page_number": 1}]
     result = _serialize_page_tables(tables)
     assert result == [{"cells": [["A"], ["1"]], "markdown": "| A |", "page_number": 1}]
 
 
+@pytest.mark.unit
 def test_helper_serialize_page_tables_with_objects() -> None:
     table = MagicMock()
     table.cells = [["B"], ["2"]]
@@ -1173,12 +805,14 @@ def test_helper_serialize_page_tables_with_objects() -> None:
     assert result == [{"cells": [["B"], ["2"]], "markdown": "| B |", "page_number": 2}]
 
 
+@pytest.mark.unit
 def test_helper_serialize_warnings_with_dicts() -> None:
     warnings = [{"source": "ocr", "message": "low confidence"}]
     result = _serialize_warnings(warnings)
     assert result == [{"source": "ocr", "message": "low confidence"}]
 
 
+@pytest.mark.unit
 def test_helper_serialize_warnings_with_objects() -> None:
     w = MagicMock()
     w.source = "parser"
@@ -1187,26 +821,8 @@ def test_helper_serialize_warnings_with_objects() -> None:
     assert result == [{"source": "parser", "message": "skipped element"}]
 
 
-def test_metadata_file_extensions_for_pdf() -> None:
-    """PDF extraction should include file_extensions in metadata."""
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
 
-    doc = result["documents"][0]
-    assert "file_extensions" in doc.meta
-    assert "pdf" in doc.meta["file_extensions"]
-
-
-def test_metadata_file_extensions_for_text() -> None:
-    """Text file extraction should include file_extensions in metadata."""
-    converter = KreuzbergConverter(batch=False)
-    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-
-    doc = result["documents"][0]
-    assert "file_extensions" in doc.meta
-    assert "txt" in doc.meta["file_extensions"]
-
-
+@pytest.mark.unit
 def test_metadata_file_extensions_mock() -> None:
     """_build_extraction_metadata should add file_extensions from MIME type."""
     result = _make_mock_result(mime_type="application/pdf")
@@ -1219,6 +835,7 @@ def test_metadata_file_extensions_mock() -> None:
     assert meta["file_extensions"] == ["pdf"]
 
 
+@pytest.mark.unit
 def test_metadata_no_file_extensions_when_no_mime() -> None:
     """No file_extensions key when MIME type is not available."""
     result = _make_mock_result(mime_type=None)

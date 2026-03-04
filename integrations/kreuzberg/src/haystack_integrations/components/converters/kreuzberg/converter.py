@@ -98,7 +98,6 @@ class KreuzbergConverter:
         config_path: str | Path | None = None,
         store_full_path: bool = False,
         batch: bool = True,
-        append_tables_to_content: bool = True,
         easyocr_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """
@@ -121,12 +120,6 @@ class KreuzbergConverter:
             If `True`, use kreuzberg's batch extraction APIs, which leverage
             Rust's rayon thread pool for parallel processing. If `False`,
             sources are extracted one at a time.
-        :param append_tables_to_content:
-            If `True`, append extracted table Markdown to the end of each
-            Document's content. **Note:** When using ``output_format="markdown"``
-            with kreuzberg 4.4.1+, OCR-detected tables are automatically inlined
-            into the content at their correct positions. Set this to ``False``
-            with markdown output to avoid duplicate tables.
         :param easyocr_kwargs:
             Optional keyword arguments to pass to EasyOCR when using the
             `"easyocr"` backend. Supports GPU, beam width, model storage,
@@ -136,7 +129,6 @@ class KreuzbergConverter:
         self.config_path = str(config_path) if config_path is not None else None
         self.store_full_path = store_full_path
         self.batch = batch
-        self.append_tables_to_content = append_tables_to_content
         self.easyocr_kwargs = easyocr_kwargs
 
     def to_dict(self) -> dict[str, Any]:
@@ -153,7 +145,6 @@ class KreuzbergConverter:
             config_path=self.config_path,
             store_full_path=self.store_full_path,
             batch=self.batch,
-            append_tables_to_content=self.append_tables_to_content,
             easyocr_kwargs=self.easyocr_kwargs,
         )
 
@@ -167,7 +158,8 @@ class KreuzbergConverter:
         :returns:
             Deserialized component.
         """
-        init_params = data.get("init_parameters", {})
+        data = {**data, "init_parameters": dict(data.get("init_parameters", {}))}
+        init_params = data["init_parameters"]
         config_data = init_params.get("config")
         if isinstance(config_data, str):
             # JSON string from config_to_json — round-trip via a temp file
@@ -196,8 +188,9 @@ class KreuzbergConverter:
         else:
             config = ExtractionConfig()
 
-        # When both config and config_path are provided, fill any None gaps
-        # in config from the file config (config takes priority).
+        # When both config and config_path are provided, fill gaps in
+        # config from the file config.  config_merge(base, source) fills
+        # unset fields in *base* from *source* — base values always win.
         if self.config is not None and self.config_path is not None:
             file_config = ExtractionConfig.from_file(self.config_path)
             config_merge(config, file_config)
@@ -322,9 +315,7 @@ class KreuzbergConverter:
 
         # Extracted keywords
         if result.extracted_keywords:
-            meta["extracted_keywords"] = [
-                {"text": kw.text, "score": kw.score, "algorithm": kw.algorithm} for kw in result.extracted_keywords
-            ]
+            meta["extracted_keywords"] = _serialize_keywords(result.extracted_keywords)
 
         # Output format tracking
         if result.output_format:
@@ -345,17 +336,7 @@ class KreuzbergConverter:
         # Image extraction metadata (no binary data)
         if result.images:
             meta["image_count"] = len(result.images)
-            meta["images"] = [
-                {
-                    "format": img.get("format"),
-                    "page_number": img.get("page_number"),
-                    "width": img.get("width"),
-                    "height": img.get("height"),
-                    "description": img.get("description"),
-                    "image_index": img.get("image_index"),
-                }
-                for img in result.images
-            ]
+            meta["images"] = _serialize_images(result.images)
 
         # PDF annotations
         if result.annotations:
@@ -363,11 +344,15 @@ class KreuzbergConverter:
 
         return meta
 
-    def _assemble_content(self, text: str, tables: list[Any] | None) -> str:
+    @staticmethod
+    def _assemble_content(text: str, tables: list[Any] | None, output_format: str | None) -> str:
         """
-        Assemble document content, optionally appending table markdown.
+        Assemble document content, appending table markdown for plain-text output.
+
+        When ``output_format`` is ``"markdown"`` or ``"html"``, kreuzberg already
+        inlines tables into the content, so appending is skipped to avoid duplicates.
         """
-        if not self.append_tables_to_content or not tables:
+        if not tables or output_format in ("markdown", "html"):
             return text
 
         table_blocks = [t.markdown for t in tables if t.markdown]
@@ -408,7 +393,7 @@ class KreuzbergConverter:
             return self._create_per_page_documents(result, base_meta, source_meta, user_meta)
 
         # Default: unified mode — one Document per source
-        content = self._assemble_content(result.content, result.tables)
+        content = self._assemble_content(result.content, result.tables, result.output_format)
         merged = {**base_meta, **source_meta, **copy.deepcopy(user_meta)}
         return [Document(content=content, meta=merged)]
 
@@ -421,12 +406,13 @@ class KreuzbergConverter:
     ) -> list[Document]:
         """Create one Document per page."""
         documents: list[Document] = []
+        append_tables = result.output_format not in ("markdown", "html")
         for page in result.pages:
             page_content = page.get("content", "")
             page_tables = page.get("tables", [])
             page_images = page.get("images", [])
 
-            if self.append_tables_to_content and page_tables:
+            if append_tables and page_tables:
                 table_blocks = [t.markdown for t in page_tables if hasattr(t, "markdown") and t.markdown]
                 if not table_blocks:
                     # Tables might be dicts in page context
@@ -447,15 +433,13 @@ class KreuzbergConverter:
 
             if page_images:
                 page_meta["image_count"] = len(page_images)
-                page_meta["images"] = [
-                    {k: v for k, v in img.items() if k != "data"} if isinstance(img, dict) else img
-                    for img in page_images
-                ]
+                page_meta["images"] = _serialize_images(page_images)
 
             # Remove document-level table/image info to avoid confusion
             # (page-level info is more specific)
-            page_meta.pop("table_count", None) if not page_tables else None
-            page_meta.pop("tables", None) if not page_tables else None
+            if not page_tables:
+                page_meta.pop("table_count", None)
+                page_meta.pop("tables", None)
 
             page_meta.update(copy.deepcopy(user_meta))
             documents.append(Document(content=page_content, meta=page_meta))
@@ -520,9 +504,7 @@ class KreuzbergConverter:
             raw["processing_warnings"] = _serialize_warnings(result.processing_warnings)
 
         if result.extracted_keywords:
-            raw["extracted_keywords"] = [
-                {"text": kw.text, "score": kw.score, "algorithm": kw.algorithm} for kw in result.extracted_keywords
-            ]
+            raw["extracted_keywords"] = _serialize_keywords(result.extracted_keywords)
 
         if result.annotations:
             raw["annotations"] = _serialize_annotations(result.annotations)
@@ -542,12 +524,12 @@ class KreuzbergConverter:
             raw["chunks"] = [{"content": c.content, "metadata": c.metadata} for c in result.chunks]
 
         if result.images:
-            raw["images"] = [{k: v for k, v in img.items() if k != "data"} for img in result.images]
+            raw["images"] = _serialize_images(result.images)
 
         return raw
 
     @staticmethod
-    def _log_extraction_error(source: Any, error: Exception) -> None:
+    def _log_extraction_error(source: str | Path | ByteStream, error: Exception) -> None:
         """
         Log a structured extraction error using kreuzberg's error
         diagnostics when available.
@@ -563,7 +545,8 @@ class KreuzbergConverter:
                 name=code_name,
                 details=details.get("message", str(error)),
             )
-        except Exception:
+        except Exception as diag_err:
+            logger.debug("Failed to get error diagnostics: {err}", err=diag_err)
             logger.warning(
                 "Could not convert {source} to Document. Skipping it. Error: {error}",
                 source=source,
@@ -605,7 +588,7 @@ class KreuzbergConverter:
         """
         # Expand directories
         has_dirs = any(
-            isinstance(s, (str, Path)) and not isinstance(s, ByteStream) and Path(s).is_dir() for s in sources
+            isinstance(s, (str, Path)) and Path(s).is_dir() for s in sources
         )
         if has_dirs and isinstance(meta, list):
             msg = (
@@ -711,6 +694,16 @@ class KreuzbergConverter:
             List of OCR backend names.
         """
         return cast(list[str], list_ocr_backends())
+
+def _serialize_keywords(keywords: list[Any]) -> list[dict[str, Any]]:
+    """Serialize ExtractedKeyword objects to plain dicts."""
+    return [{"text": kw.text, "score": kw.score, "algorithm": kw.algorithm} for kw in keywords]
+
+
+def _serialize_images(images: list[Any]) -> list[dict[str, Any]]:
+    """Serialize image metadata dicts, excluding binary data."""
+    return [{k: v for k, v in img.items() if k != "data"} for img in images]
+
 
 def _serialize_tables(tables: list[Any]) -> list[dict[str, Any]]:
     """Serialize ExtractedTable objects to plain dicts."""
