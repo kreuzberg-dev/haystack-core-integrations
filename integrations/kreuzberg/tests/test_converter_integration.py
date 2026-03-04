@@ -424,7 +424,7 @@ def test_batch_vs_sequential_parity() -> None:
     seq_docs = _docs(sequential_result)
 
     assert len(batch_docs) == len(seq_docs)
-    for b, s in zip(batch_docs, seq_docs):
+    for b, s in zip(batch_docs, seq_docs, strict=True):
         assert b.content == s.content
 
 

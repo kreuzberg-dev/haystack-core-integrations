@@ -152,7 +152,6 @@ language = "eng+deu"
 | `config_path` | `str \| Path \| None` | `None` | Path to a kreuzberg config file (TOML/YAML/JSON). When both `config` and `config_path` are given, `config` takes precedence. |
 | `store_full_path` | `bool` | `False` | If `True`, store full file paths in metadata. If `False`, store only the file name. |
 | `batch` | `bool` | `True` | Use kreuzberg's batch APIs for parallel extraction via Rust rayon thread pool. |
-| `append_tables_to_content` | `bool` | `True` | Append extracted table Markdown to document content. Set to `False` with `output_format="markdown"` to avoid duplicate tables (kreuzberg 4.4.1+ inlines them). |
 | `easyocr_kwargs` | `dict \| None` | `None` | Extra keyword arguments for EasyOCR (GPU, beam width, model storage, etc.). |
 
 ### `KreuzbergConverter.run`

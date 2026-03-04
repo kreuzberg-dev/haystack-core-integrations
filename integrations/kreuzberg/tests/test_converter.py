@@ -8,10 +8,24 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from kreuzberg import ExtractionConfig, ExtractionResult, OcrConfig, config_to_json
+from haystack.dataclasses import ByteStream
+from kreuzberg import (
+    ExtractedTable,
+    ExtractionConfig,
+    ExtractionResult,
+    LanguageDetectionConfig,
+    OcrConfig,
+    config_to_json,
+)
 
 from haystack_integrations.components.converters.kreuzberg import KreuzbergConverter
-from haystack_integrations.components.converters.kreuzberg.converter import _serialize_page_tables, _serialize_warnings
+from haystack_integrations.components.converters.kreuzberg.converter import (
+    _serialize_annotations,
+    _serialize_keywords,
+    _serialize_page_tables,
+    _serialize_tables,
+    _serialize_warnings,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 CONVERTER_MODULE = "haystack_integrations.components.converters.kreuzberg.converter"
@@ -189,7 +203,6 @@ def test_serialization_from_dict_empty_init_parameters() -> None:
     assert converter.easyocr_kwargs is None
 
 
-
 @pytest.mark.unit
 def test_serialization_roundtrip_easyocr_kwargs() -> None:
     converter = KreuzbergConverter(easyocr_kwargs={"gpu": False, "beam_width": 5})
@@ -309,7 +322,7 @@ def test_build_config_merges_config_and_config_path() -> None:
 
 @pytest.mark.unit
 def test_table_assembly_appends_markdown_to_content() -> None:
-    table = MagicMock()
+    table = MagicMock(spec=ExtractedTable)
     table.markdown = "| A | B |\n|---|---|\n| 1 | 2 |"
     content = KreuzbergConverter._assemble_content("Main text", [table], "plain")
     assert content == "Main text\n\n| A | B |\n|---|---|\n| 1 | 2 |"
@@ -317,9 +330,9 @@ def test_table_assembly_appends_markdown_to_content() -> None:
 
 @pytest.mark.unit
 def test_table_assembly_appends_multiple_tables() -> None:
-    t1 = MagicMock()
+    t1 = MagicMock(spec=ExtractedTable)
     t1.markdown = "| A |\n|---|\n| 1 |"
-    t2 = MagicMock()
+    t2 = MagicMock(spec=ExtractedTable)
     t2.markdown = "| B |\n|---|\n| 2 |"
     content = KreuzbergConverter._assemble_content("Text", [t1, t2], "plain")
     assert content == "Text\n\n| A |\n|---|\n| 1 |\n\n| B |\n|---|\n| 2 |"
@@ -327,7 +340,7 @@ def test_table_assembly_appends_multiple_tables() -> None:
 
 @pytest.mark.unit
 def test_table_assembly_skips_tables_with_empty_markdown() -> None:
-    table = MagicMock()
+    table = MagicMock(spec=ExtractedTable)
     table.markdown = ""
     content = KreuzbergConverter._assemble_content("Main text", [table], "plain")
     assert content == "Main text"
@@ -341,14 +354,14 @@ def test_table_assembly_no_tables_returns_text_unchanged() -> None:
 
 @pytest.mark.unit
 def test_table_assembly_skipped_for_markdown_format() -> None:
-    table = MagicMock()
+    table = MagicMock(spec=ExtractedTable)
     table.markdown = "| A |"
     assert KreuzbergConverter._assemble_content("text", [table], "markdown") == "text"
 
 
 @pytest.mark.unit
 def test_table_assembly_skipped_for_html_format() -> None:
-    table = MagicMock()
+    table = MagicMock(spec=ExtractedTable)
     table.markdown = "| A |"
     assert KreuzbergConverter._assemble_content("text", [table], "html") == "text"
 
@@ -387,19 +400,25 @@ def test_edge_sequential_extraction_error_skipped(
 
 
 def _make_mock_result(**overrides: Any) -> MagicMock:
-    """Create a mock ExtractionResult with all attributes defaulting to None."""
+    """Create a mock ExtractionResult with realistic defaults.
+
+    Fields that are never ``None`` at runtime (``metadata``, ``tables``,
+    ``processing_warnings``, ``output_format``, ``result_format``,
+    ``mime_type``) use their actual default values.  Nullable fields
+    default to ``None``.
+    """
     result = MagicMock(spec=ExtractionResult)
     defaults: dict[str, Any] = {
         "content": "",
-        "metadata": None,
+        "metadata": {},
         "quality_score": None,
-        "processing_warnings": None,
+        "processing_warnings": [],
         "detected_languages": None,
         "extracted_keywords": None,
-        "output_format": None,
-        "result_format": None,
-        "mime_type": None,
-        "tables": None,
+        "output_format": "plain",
+        "result_format": "unified",
+        "mime_type": "text/plain",
+        "tables": [],
         "images": None,
         "annotations": None,
         "pages": None,
@@ -447,6 +466,7 @@ def test_metadata_mock_images_excludes_binary_data() -> None:
     assert meta["images"][0]["description"] == "chart"
     assert meta["images"][0]["image_index"] == 0
     assert meta["images"][0]["page_number"] == 1
+    assert "data" not in meta["images"][0]
 
 
 @pytest.mark.unit
@@ -466,7 +486,7 @@ def test_metadata_mock_annotations() -> None:
 
 @pytest.mark.unit
 def test_metadata_mock_tables() -> None:
-    table = MagicMock()
+    table = MagicMock(spec=ExtractedTable)
     table.cells = [["A", "B"], ["1", "2"]]
     table.markdown = "| A | B |\n|---|---|\n| 1 | 2 |"
     table.page_number = 1
@@ -475,6 +495,7 @@ def test_metadata_mock_tables() -> None:
     converter = KreuzbergConverter()
     meta = converter._build_extraction_metadata(result)
     assert meta["table_count"] == 1
+    assert meta["tables"][0]["cells"] == [["A", "B"], ["1", "2"]]
     assert meta["tables"][0]["markdown"] == "| A | B |\n|---|---|\n| 1 | 2 |"
     assert meta["tables"][0]["page_number"] == 1
 
@@ -534,18 +555,19 @@ def test_metadata_file_extensions_mock() -> None:
 
 
 @pytest.mark.unit
-def test_metadata_no_file_extensions_when_no_mime() -> None:
-    result = _make_mock_result(mime_type=None)
+def test_metadata_no_file_extensions_for_unknown_mime() -> None:
+    result = _make_mock_result(mime_type="application/x-unknown-format")
     converter = KreuzbergConverter()
     meta = converter._build_extraction_metadata(result)
 
+    assert meta["mime_type"] == "application/x-unknown-format"
     assert "file_extensions" not in meta
 
 
 @pytest.mark.unit
 def test_chunked_creates_one_document_per_chunk() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
     chunk1 = MagicMock()
     chunk1.content = "chunk one"
     chunk1.embedding = [0.1, 0.2, 0.3]
@@ -579,7 +601,7 @@ def test_chunked_creates_one_document_per_chunk() -> None:
 @pytest.mark.unit
 def test_chunked_single_chunk() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
     chunk = MagicMock()
     chunk.content = "only chunk"
     chunk.embedding = None
@@ -599,9 +621,9 @@ def test_chunked_single_chunk() -> None:
 @pytest.mark.unit
 def test_per_page_mock_with_object_tables() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
     result.output_format = "plain"
-    table = MagicMock()
+    table = MagicMock(spec=ExtractedTable)
     table.markdown = "| X |\n|---|\n| 1 |"
     table.cells = [["X"], ["1"]]
     table.page_number = 1
@@ -631,7 +653,7 @@ def test_per_page_mock_with_object_tables() -> None:
 @pytest.mark.unit
 def test_per_page_mock_with_dict_tables() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
     result.output_format = "plain"
     result.pages = [
         {
@@ -659,7 +681,8 @@ def test_per_page_mock_with_dict_tables() -> None:
 @pytest.mark.unit
 def test_per_page_mock_with_images() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
+    result.output_format = "plain"
     result.pages = [
         {
             "page_number": 1,
@@ -688,7 +711,8 @@ def test_per_page_mock_with_images() -> None:
 @pytest.mark.unit
 def test_per_page_mock_without_tables_removes_document_level_table_meta() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
+    result.output_format = "plain"
     result.pages = [
         {
             "page_number": 1,
@@ -713,7 +737,8 @@ def test_per_page_mock_without_tables_removes_document_level_table_meta() -> Non
 @pytest.mark.unit
 def test_deepcopy_per_page_nested_meta_not_shared() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
+    result.output_format = "plain"
     result.pages = [
         {"page_number": 1, "content": "Page 1", "is_blank": False, "tables": [], "images": []},
         {"page_number": 2, "content": "Page 2", "is_blank": False, "tables": [], "images": []},
@@ -739,7 +764,7 @@ def test_deepcopy_per_page_nested_meta_not_shared() -> None:
 @pytest.mark.unit
 def test_deepcopy_chunked_nested_meta_not_shared() -> None:
     converter = KreuzbergConverter()
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
     chunk1 = MagicMock()
     chunk1.content = "chunk one"
     chunk1.embedding = None
@@ -789,7 +814,7 @@ def test_helper_serialize_page_tables_with_dicts() -> None:
 
 @pytest.mark.unit
 def test_helper_serialize_page_tables_with_objects() -> None:
-    table = MagicMock()
+    table = MagicMock(spec=ExtractedTable)
     table.cells = [["B"], ["2"]]
     table.markdown = "| B |"
     table.page_number = 2
@@ -811,3 +836,356 @@ def test_helper_serialize_warnings_with_objects() -> None:
     w.message = "skipped element"
     result = _serialize_warnings([w])
     assert result == [{"source": "parser", "message": "skipped element"}]
+
+
+@pytest.mark.unit
+def test_table_assembly_with_dict_tables() -> None:
+    tables = [{"markdown": "| A |\n|---|\n| 1 |", "cells": [["A"], ["1"]], "page_number": 1}]
+    content = KreuzbergConverter._assemble_content("Main text", tables, "plain")
+    assert content == "Main text\n\n| A |\n|---|\n| 1 |"
+
+
+@pytest.mark.unit
+def test_table_assembly_with_dict_tables_empty_markdown() -> None:
+    tables: list[dict[str, Any]] = [{"markdown": "", "cells": [], "page_number": 1}]
+    content = KreuzbergConverter._assemble_content("Main text", tables, "plain")
+    assert content == "Main text"
+
+
+@pytest.mark.unit
+def test_helper_serialize_tables_with_objects() -> None:
+    table = MagicMock(spec=ExtractedTable)
+    table.cells = [["A", "B"], ["1", "2"]]
+    table.markdown = "| A | B |\n|---|---|\n| 1 | 2 |"
+    table.page_number = 1
+    result = _serialize_tables([table])
+    assert result == [
+        {
+            "cells": [["A", "B"], ["1", "2"]],
+            "markdown": "| A | B |\n|---|---|\n| 1 | 2 |",
+            "page_number": 1,
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_serialize_keywords() -> None:
+    kw1 = MagicMock()
+    kw1.text = "machine learning"
+    kw1.score = 0.95
+    kw1.algorithm = "tfidf"
+    kw2 = MagicMock()
+    kw2.text = "neural network"
+    kw2.score = 0.87
+    kw2.algorithm = "yake"
+
+    result = _serialize_keywords([kw1, kw2])
+
+    assert result == [
+        {"text": "machine learning", "score": 0.95, "algorithm": "tfidf"},
+        {"text": "neural network", "score": 0.87, "algorithm": "yake"},
+    ]
+
+
+@pytest.mark.unit
+def test_serialize_annotations_with_objects() -> None:
+    ann = MagicMock()
+    ann.annotation_type = "highlight"
+    ann.content = "important text"
+    ann.page_number = 3
+
+    result = _serialize_annotations([ann])
+
+    assert result == [{"type": "highlight", "content": "important text", "page_number": 3}]
+
+
+@pytest.mark.unit
+def test_build_config_skips_auto_language_detection_when_already_set() -> None:
+    config = ExtractionConfig(language_detection=LanguageDetectionConfig(enabled=False))
+    converter = KreuzbergConverter(config=config)
+    built = converter._build_config()
+    assert built.language_detection.enabled is False
+
+
+@pytest.mark.unit
+def test_expand_sources_passthrough_bytestream() -> None:
+    bs = ByteStream(data=b"hello")
+    result = KreuzbergConverter._expand_sources([bs])
+    assert result == [bs]
+
+
+@pytest.mark.unit
+def test_expand_sources_expands_directory(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "b.txt").write_text("b")
+
+    result = KreuzbergConverter._expand_sources([tmp_path])
+
+    assert len(result) == 2
+    assert tmp_path / "a.txt" in result
+    assert tmp_path / "b.txt" in result
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".extract_bytes_sync")
+@patch(CONVERTER_MODULE + ".detect_mime_type")
+def test_extract_single_with_bytestream(mock_detect: MagicMock, mock_extract: MagicMock) -> None:
+    mock_detect.return_value = "application/octet-stream"
+    mock_result = _make_mock_result()
+    mock_extract.return_value = mock_result
+
+    converter = KreuzbergConverter()
+    config = ExtractionConfig()
+    bs = ByteStream(data=b"hello world")  # no mime_type → detect_mime_type called
+
+    result = converter._extract_single(bs, config)
+
+    assert result is mock_result
+    assert mock_extract.call_args[0][0] == b"hello world"
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".batch_extract_files_sync")
+def test_extract_batch_with_files(mock_batch_files: MagicMock) -> None:
+    mock_result = _make_mock_result()
+    mock_batch_files.return_value = [mock_result]
+
+    converter = KreuzbergConverter()
+    results = converter._extract_batch([Path("a.pdf")], ExtractionConfig())
+
+    assert results[0] is mock_result
+    mock_batch_files.assert_called_once()
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".batch_extract_bytes_sync")
+def test_extract_batch_with_bytestreams(mock_batch_bytes: MagicMock) -> None:
+    mock_result = _make_mock_result()
+    mock_batch_bytes.return_value = [mock_result]
+
+    converter = KreuzbergConverter()
+    bs = ByteStream(data=b"hello", mime_type="text/plain")
+
+    results = converter._extract_batch([bs], ExtractionConfig())
+
+    assert results[0] is mock_result
+    mock_batch_bytes.assert_called_once()
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".batch_extract_bytes_sync")
+@patch(CONVERTER_MODULE + ".batch_extract_files_sync")
+def test_extract_batch_with_mixed_sources(mock_batch_files: MagicMock, mock_batch_bytes: MagicMock) -> None:
+    file_result = _make_mock_result(content="from file")
+    bytes_result = _make_mock_result(content="from bytes")
+    mock_batch_files.return_value = [file_result]
+    mock_batch_bytes.return_value = [bytes_result]
+
+    converter = KreuzbergConverter()
+    bs = ByteStream(data=b"hello", mime_type="text/plain")
+
+    results = converter._extract_batch([Path("a.pdf"), bs], ExtractionConfig())
+
+    assert results[0] is file_result
+    assert results[1] is bytes_result
+
+
+@pytest.mark.unit
+def test_metadata_detected_languages() -> None:
+    result = _make_mock_result(detected_languages=["en", "de"])
+    converter = KreuzbergConverter()
+    meta = converter._build_extraction_metadata(result)
+    assert meta["detected_languages"] == ["en", "de"]
+
+
+@pytest.mark.unit
+def test_metadata_extensions_runtime_error() -> None:
+    result = _make_mock_result(mime_type="application/pdf")
+    converter = KreuzbergConverter()
+
+    with patch(f"{CONVERTER_MODULE}.get_extensions_for_mime", side_effect=RuntimeError("unknown mime")):
+        meta = converter._build_extraction_metadata(result)
+
+    assert "file_extensions" not in meta
+    assert meta["mime_type"] == "application/pdf"
+
+
+@pytest.mark.unit
+def test_create_documents_dispatches_to_chunked() -> None:
+    chunk = MagicMock()
+    chunk.content = "chunk text"
+    chunk.embedding = None
+    result = _make_mock_result(chunks=[chunk], pages=None)
+
+    bytestream = MagicMock()
+    bytestream.meta = {"file_path": "test.txt"}
+
+    converter = KreuzbergConverter()
+    with patch.object(converter, "_create_chunked_documents", wraps=converter._create_chunked_documents) as spy:
+        converter._create_documents(result, bytestream, {})
+        spy.assert_called_once()
+
+
+@pytest.mark.unit
+def test_create_documents_dispatches_to_per_page() -> None:
+    page = {"page_number": 1, "content": "page text", "is_blank": False, "tables": [], "images": []}
+    result = _make_mock_result(pages=[page], chunks=None)
+
+    bytestream = MagicMock()
+    bytestream.meta = {"file_path": "test.txt"}
+
+    converter = KreuzbergConverter()
+    with patch.object(converter, "_create_per_page_documents", wraps=converter._create_per_page_documents) as spy:
+        converter._create_documents(result, bytestream, {})
+        spy.assert_called_once()
+
+
+@pytest.mark.unit
+def test_serialize_result_minimal() -> None:
+    result = _make_mock_result()  # tables=[], quality_score=None, etc.
+
+    raw = KreuzbergConverter._serialize_result(result)
+
+    assert "content" in raw
+    assert "mime_type" in raw
+    assert "output_format" in raw
+    assert "result_format" in raw
+    assert "metadata" in raw
+    # Optional keys absent when empty/None
+    assert "tables" not in raw
+    assert "quality_score" not in raw
+    assert "detected_languages" not in raw
+    assert "processing_warnings" not in raw
+    assert "extracted_keywords" not in raw
+    assert "annotations" not in raw
+    assert "pages" not in raw
+    assert "chunks" not in raw
+    assert "images" not in raw
+
+
+@pytest.mark.unit
+def test_serialize_result_full() -> None:
+    table = MagicMock(spec=ExtractedTable)
+    table.cells = [["A"]]
+    table.markdown = "| A |"
+    table.page_number = 1
+
+    warning = MagicMock()
+    warning.source = "ocr"
+    warning.message = "low confidence"
+
+    kw = MagicMock()
+    kw.text = "python"
+    kw.score = 0.9
+    kw.algorithm = "tfidf"
+
+    ann = MagicMock()
+    ann.annotation_type = "highlight"
+    ann.content = "important"
+    ann.page_number = 1
+
+    chunk = MagicMock()
+    chunk.content = "chunk text"
+    chunk.metadata = {}
+
+    result = _make_mock_result(
+        tables=[table],
+        quality_score=0.9,
+        detected_languages=["en"],
+        processing_warnings=[warning],
+        extracted_keywords=[kw],
+        annotations=[ann],
+        pages=[{"page_number": 1, "content": "text", "is_blank": False, "tables": []}],
+        chunks=[chunk],
+        images=[{"format": "png", "width": 100, "height": 100}],
+    )
+
+    raw = KreuzbergConverter._serialize_result(result)
+
+    assert "tables" in raw
+    assert raw["quality_score"] == 0.9
+    assert raw["detected_languages"] == ["en"]
+    assert "processing_warnings" in raw
+    assert raw["extracted_keywords"] == [{"text": "python", "score": 0.9, "algorithm": "tfidf"}]
+    assert "annotations" in raw
+    assert "pages" in raw
+    assert raw["chunks"] == [{"content": "chunk text", "metadata": {}}]
+    assert "images" in raw
+
+
+@pytest.mark.unit
+def test_run_raises_for_directory_with_list_meta(tmp_path: Path) -> None:
+    converter = KreuzbergConverter()
+    with pytest.raises(ValueError):
+        converter.run(sources=[str(tmp_path)], meta=[{}, {}])
+
+
+@pytest.mark.unit
+def test_run_uses_batch_path_for_multiple_sources() -> None:
+    converter = KreuzbergConverter(batch=True)
+    with patch.object(converter, "_run_batch", return_value=([], [])) as mock_batch:
+        result = converter.run(sources=["a.pdf", "b.pdf"])
+    mock_batch.assert_called_once()
+    assert result == {"documents": [], "raw_extraction": []}
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".get_bytestream_from_source")
+def test_run_sequential_skips_on_source_read_failure(mock_get_bs: MagicMock) -> None:
+    mock_get_bs.side_effect = Exception("read error")
+
+    converter = KreuzbergConverter(batch=False)
+    docs, raw = converter._run_sequential([Path("nonexistent.txt")], [{}], ExtractionConfig())
+
+    assert docs == []
+    assert raw == []
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".extract_file_sync")
+@patch(CONVERTER_MODULE + ".get_bytestream_from_source")
+def test_run_sequential_success_path(mock_get_bs: MagicMock, mock_extract: MagicMock) -> None:
+    mock_bytestream = MagicMock()
+    mock_bytestream.meta = {"file_path": "test.txt"}
+    mock_get_bs.return_value = mock_bytestream
+    mock_extract.return_value = _make_mock_result()
+
+    converter = KreuzbergConverter(batch=False)
+    docs, raw = converter._run_sequential([Path("test.txt")], [{}], ExtractionConfig())
+
+    assert len(docs) == 1
+    assert len(raw) == 1
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".get_bytestream_from_source")
+def test_run_batch_skips_failed_sources(mock_get_bs: MagicMock) -> None:
+    mock_bytestream = MagicMock()
+    mock_bytestream.meta = {"file_path": "b.pdf"}
+    mock_get_bs.side_effect = [Exception("read error"), mock_bytestream]
+
+    mock_result = _make_mock_result()
+    converter = KreuzbergConverter()
+
+    with patch.object(converter, "_extract_batch", return_value=[None, mock_result]):
+        docs, raw = converter._run_batch([Path("a.pdf"), Path("b.pdf")], [{}, {}], ExtractionConfig())
+
+    assert len(docs) == 1
+    assert len(raw) == 1
+
+
+@pytest.mark.unit
+@patch(CONVERTER_MODULE + ".get_bytestream_from_source")
+def test_run_batch_success(mock_get_bs: MagicMock) -> None:
+    mock_bytestream = MagicMock()
+    mock_bytestream.meta = {"file_path": "test.pdf"}
+    mock_get_bs.return_value = mock_bytestream
+
+    mock_result = _make_mock_result()
+    converter = KreuzbergConverter()
+
+    with patch.object(converter, "_extract_batch", return_value=[mock_result, mock_result]):
+        docs, raw = converter._run_batch([Path("a.pdf"), Path("b.pdf")], [{}, {}], ExtractionConfig())
+
+    assert len(docs) == 2
+    assert len(raw) == 2

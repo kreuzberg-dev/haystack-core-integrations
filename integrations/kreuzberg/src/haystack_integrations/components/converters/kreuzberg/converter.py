@@ -13,7 +13,9 @@ from haystack.components.converters.utils import (
 )
 from haystack.dataclasses import ByteStream
 
-from kreuzberg import (
+from kreuzberg import (  # type: ignore[attr-defined]
+    ExtractedImage,
+    ExtractedTable,
     ExtractionConfig,
     ExtractionResult,
     LanguageDetectionConfig,
@@ -244,8 +246,11 @@ class KreuzbergConverter:
         """
         Extract content from multiple sources using kreuzberg's batch APIs.
 
-        Returns ``None`` for sources that were skipped (e.g. unreadable).
-        Exceptions from batch extraction are propagated to the caller.
+        The result list is indexed to match ``sources``.  Slots for
+        file-based sources are filled by ``batch_extract_files_sync``;
+        slots for bytes-based sources by ``batch_extract_bytes_sync``.
+        A slot remains ``None`` only if neither batch API populated it
+        (i.e. the source was not dispatched to either batch call).
         """
         file_indices: list[int] = []
         file_paths: list[str | Path] = []
@@ -288,11 +293,9 @@ class KreuzbergConverter:
         None values are filtered out.
         """
         # Flatten kreuzberg document metadata (format-specific TypedDict)
-        meta: dict[str, Any] = (
-            {k: v for k, v in result.metadata.items() if v is not None and k not in _METADATA_OVERLAP_KEYS}
-            if result.metadata
-            else {}
-        )
+        meta: dict[str, Any] = {
+            k: v for k, v in result.metadata.items() if v is not None and k not in _METADATA_OVERLAP_KEYS
+        }
 
         # Quality score
         if result.quality_score is not None:
@@ -311,15 +314,15 @@ class KreuzbergConverter:
             meta["extracted_keywords"] = _serialize_keywords(result.extracted_keywords)
 
         # Output format tracking
-        if result.output_format:
-            meta["output_format"] = str(result.output_format)
-        if result.result_format:
-            meta["result_format"] = str(result.result_format)
-        if result.mime_type:
-            meta["mime_type"] = result.mime_type
+        meta["output_format"] = str(result.output_format)
+        meta["result_format"] = str(result.result_format)
+        meta["mime_type"] = result.mime_type
+        try:
             extensions = get_extensions_for_mime(result.mime_type)
             if extensions:
                 meta["file_extensions"] = extensions
+        except RuntimeError:
+            pass
 
         # Tables metadata
         if result.tables:
@@ -338,7 +341,9 @@ class KreuzbergConverter:
         return meta
 
     @staticmethod
-    def _assemble_content(text: str, tables: list[Any] | None, output_format: str | None) -> str:
+    def _assemble_content(
+        text: str, tables: list[ExtractedTable | dict[str, Any]] | None, output_format: str | None
+    ) -> str:
         """
         Assemble document content, appending table markdown for plain-text output.
 
@@ -409,7 +414,7 @@ class KreuzbergConverter:
             page_content = self._assemble_content(page_content, page_tables, result.output_format)
 
             page_meta: dict[str, Any] = {
-                **base_meta,
+                **copy.deepcopy(base_meta),
                 **source_meta,
                 "page_number": page.get("page_number"),
                 "is_blank": page.get("is_blank", False),
@@ -447,7 +452,7 @@ class KreuzbergConverter:
 
         for i, chunk in enumerate(result.chunks):
             chunk_meta = {
-                **base_meta,
+                **copy.deepcopy(base_meta),
                 **source_meta,
                 "chunk_index": i,
                 "total_chunks": total_chunks,
@@ -472,12 +477,10 @@ class KreuzbergConverter:
         raw: dict[str, Any] = {
             "content": result.content,
             "mime_type": result.mime_type,
-            "output_format": str(result.output_format) if result.output_format else None,
-            "result_format": str(result.result_format) if result.result_format else None,
+            "output_format": str(result.output_format),
+            "result_format": str(result.result_format),
+            "metadata": dict(result.metadata),
         }
-
-        if result.metadata:
-            raw["metadata"] = dict(result.metadata)
 
         if result.tables:
             raw["tables"] = _serialize_tables(result.tables)
@@ -575,9 +578,7 @@ class KreuzbergConverter:
               ExtractionResult dicts, one per successfully processed source.
         """
         # Expand directories
-        has_dirs = any(
-            isinstance(s, (str, Path)) and Path(s).is_dir() for s in sources
-        )
+        has_dirs = any(isinstance(s, (str, Path)) and Path(s).is_dir() for s in sources)
         if has_dirs and isinstance(meta, list):
             msg = (
                 "When directories are present in 'sources', 'meta' must be a "
@@ -692,7 +693,8 @@ class KreuzbergConverter:
         """
         return cast(list[str], list_ocr_backends())
 
-def _get_table_markdown(table: Any) -> str | None:
+
+def _get_table_markdown(table: ExtractedTable | dict[str, Any]) -> str | None:
     """Get markdown string from a table (``ExtractedTable`` object or dict)."""
     if isinstance(table, dict):
         return table.get("markdown") or None
@@ -705,12 +707,12 @@ def _serialize_keywords(keywords: list[Any]) -> list[dict[str, Any]]:
     return [{"text": kw.text, "score": kw.score, "algorithm": kw.algorithm} for kw in keywords]
 
 
-def _serialize_images(images: list[Any]) -> list[dict[str, Any]]:
+def _serialize_images(images: list[ExtractedImage]) -> list[dict[str, Any]]:
     """Serialize image metadata dicts, excluding binary data."""
     return [{k: v for k, v in img.items() if k != "data"} for img in images]
 
 
-def _serialize_tables(tables: list[Any]) -> list[dict[str, Any]]:
+def _serialize_tables(tables: list[ExtractedTable]) -> list[dict[str, Any]]:
     """Serialize ExtractedTable objects to plain dicts."""
     return [
         {
@@ -721,7 +723,8 @@ def _serialize_tables(tables: list[Any]) -> list[dict[str, Any]]:
         for t in tables
     ]
 
-def _serialize_page_tables(tables: list[Any]) -> list[dict[str, Any]]:
+
+def _serialize_page_tables(tables: list[ExtractedTable | dict[str, Any]]) -> list[dict[str, Any]]:
     """Serialize tables from a page context (may be objects or dicts)."""
     serialized = []
     for t in tables:
