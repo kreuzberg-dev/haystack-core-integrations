@@ -128,7 +128,7 @@ class KreuzbergConverter:
             and other EasyOCR-specific options.
         """
         self.config = config
-        self.config_path = str(config_path) if config_path is not None else None
+        self.config_path = Path(config_path).as_posix() if config_path is not None else None
         self.store_full_path = store_full_path
         self.batch = batch
         self.easyocr_kwargs = easyocr_kwargs
