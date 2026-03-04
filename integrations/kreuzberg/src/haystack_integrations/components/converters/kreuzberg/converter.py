@@ -26,10 +26,10 @@ from kreuzberg import (
     extract_bytes_sync,
     extract_file_sync,
     get_error_details,
+    get_extensions_for_mime,
     get_last_error_code,
     list_document_extractors,
     list_ocr_backends,
-    load_extraction_config_from_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,17 @@ class KreuzbergConverter:
     `raw_extraction`. The `raw_extraction` output contains the serialized
     kreuzberg `ExtractionResult` for each source, useful for debugging or
     advanced downstream processing.
+
+    **Token reduction** can be configured via
+    ``ExtractionConfig(token_reduction=TokenReductionConfig(mode="moderate"))``
+    to reduce output size for LLM consumption. Five levels are available:
+    ``"off"``, ``"light"``, ``"moderate"``, ``"aggressive"``, ``"maximum"``.
+    The reduced text appears directly in ``Document.content``.
+
+    **Image preprocessing for OCR** can be tuned via
+    ``OcrConfig(tesseract_config=TesseractConfig(preprocessing=ImagePreprocessingConfig(...)))``
+    with options for target DPI, auto-rotate, deskew, denoise,
+    contrast enhancement, and binarization method.
     """
 
     def __init__(
@@ -107,12 +118,15 @@ class KreuzbergConverter:
             If `True`, the full file path is stored in the Document metadata.
             If `False`, only the file name is stored.
         :param batch:
-            If `True`, use kreuzberg's batch extraction APIs which leverage
+            If `True`, use kreuzberg's batch extraction APIs, which leverage
             Rust's rayon thread pool for parallel processing. If `False`,
             sources are extracted one at a time.
         :param append_tables_to_content:
-            If `True`, append extracted table markdown to the end of each
-            Document's content.
+            If `True`, append extracted table Markdown to the end of each
+            Document's content. **Note:** When using ``output_format="markdown"``
+            with kreuzberg 4.4.1+, OCR-detected tables are automatically inlined
+            into the content at their correct positions. Set this to ``False``
+            with markdown output to avoid duplicate tables.
         :param easyocr_kwargs:
             Optional keyword arguments to pass to EasyOCR when using the
             `"easyocr"` backend. Supports GPU, beam width, model storage,
@@ -156,19 +170,15 @@ class KreuzbergConverter:
         init_params = data.get("init_parameters", {})
         config_data = init_params.get("config")
         if isinstance(config_data, str):
-            # JSON string from config_to_json — round-trip via temp file
+            # JSON string from config_to_json — round-trip via a temp file
             with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                f.write(config_data)
                 tmp_path = f.name
+                f.write(config_data)
             try:
-                init_params["config"] = load_extraction_config_from_file(tmp_path)
+                init_params["config"] = ExtractionConfig.from_file(tmp_path)
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
         return default_from_dict(cls, data)
-
-    # ------------------------------------------------------------------
-    # Configuration helpers
-    # ------------------------------------------------------------------
 
     def _build_config(self) -> ExtractionConfig:
         """
@@ -182,14 +192,14 @@ class KreuzbergConverter:
             # Deep copy via JSON round-trip to avoid mutating the user's object
             config = _copy_config(self.config)
         elif self.config_path is not None:
-            config = load_extraction_config_from_file(self.config_path)
+            config = ExtractionConfig.from_file(self.config_path)
         else:
             config = ExtractionConfig()
 
         # When both config and config_path are provided, fill any None gaps
         # in config from the file config (config takes priority).
         if self.config is not None and self.config_path is not None:
-            file_config = load_extraction_config_from_file(self.config_path)
+            file_config = ExtractionConfig.from_file(self.config_path)
             config_merge(config, file_config)
 
         # Auto-enable language detection if not explicitly configured
@@ -197,10 +207,6 @@ class KreuzbergConverter:
             config.language_detection = LanguageDetectionConfig(enabled=True)
 
         return config
-
-    # ------------------------------------------------------------------
-    # Source handling
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _expand_sources(sources: list[str | Path | ByteStream]) -> list[str | Path | ByteStream]:
@@ -222,27 +228,27 @@ class KreuzbergConverter:
                     expanded.append(source)
         return expanded
 
-    # ------------------------------------------------------------------
-    # Extraction
-    # ------------------------------------------------------------------
-
     def _extract_single(
         self,
         source: str | Path | ByteStream,
         config: ExtractionConfig,
+        mime_type: str | None = None,
     ) -> ExtractionResult:
         """
         Extract content from a single source using kreuzberg.
+
+        :param mime_type:
+            Optional MIME type override. When provided, skips auto-detection.
         """
         if isinstance(source, ByteStream):
-            mime_type = source.mime_type or detect_mime_type(source.data)
+            effective_mime = mime_type or source.mime_type or detect_mime_type(source.data)
             return extract_bytes_sync(
                 source.data,
-                mime_type=mime_type,
+                mime_type=effective_mime,
                 config=config,
                 easyocr_kwargs=self.easyocr_kwargs,
             )
-        return extract_file_sync(source, config=config, easyocr_kwargs=self.easyocr_kwargs)
+        return extract_file_sync(source, mime_type=mime_type, config=config, easyocr_kwargs=self.easyocr_kwargs)
 
     def _extract_batch(
         self,
@@ -288,10 +294,6 @@ class KreuzbergConverter:
 
         return results
 
-    # ------------------------------------------------------------------
-    # Metadata & content assembly
-    # ------------------------------------------------------------------
-
     def _build_extraction_metadata(self, result: ExtractionResult) -> dict[str, Any]:
         """
         Build metadata dict from an ``ExtractionResult``, flattening kreuzberg's
@@ -331,6 +333,9 @@ class KreuzbergConverter:
             meta["result_format"] = str(result.result_format)
         if result.mime_type:
             meta["mime_type"] = result.mime_type
+            extensions = get_extensions_for_mime(result.mime_type)
+            if extensions:
+                meta["file_extensions"] = extensions
 
         # Tables metadata
         if result.tables:
@@ -370,10 +375,6 @@ class KreuzbergConverter:
             return text
 
         return text + "\n\n" + "\n\n".join(table_blocks)
-
-    # ------------------------------------------------------------------
-    # Document creation
-    # ------------------------------------------------------------------
 
     def _create_documents(
         self,
@@ -489,10 +490,6 @@ class KreuzbergConverter:
             )
 
         return documents
-
-    # ------------------------------------------------------------------
-    # Raw extraction output
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _serialize_result(result: ExtractionResult) -> dict[str, Any]:
@@ -805,9 +802,9 @@ def _copy_config(config: ExtractionConfig) -> ExtractionConfig:
     """
     json_str = config_to_json(config)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        f.write(json_str)
         tmp_path = f.name
+        f.write(json_str)
     try:
-        return load_extraction_config_from_file(tmp_path)
+        return ExtractionConfig.from_file(tmp_path)
     finally:
         Path(tmp_path).unlink(missing_ok=True)

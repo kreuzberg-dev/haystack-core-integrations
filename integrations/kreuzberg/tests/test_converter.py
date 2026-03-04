@@ -980,11 +980,6 @@ def test_chunked_single_chunk() -> None:
     assert docs[0].meta["total_chunks"] == 1
 
 
-# ======================================================================
-# Mock-based tests for _create_per_page_documents
-# ======================================================================
-
-
 def test_per_page_mock_with_object_tables() -> None:
     converter = KreuzbergConverter(append_tables_to_content=True)
     result = MagicMock()
@@ -1093,11 +1088,6 @@ def test_per_page_mock_without_tables_removes_document_level_table_meta() -> Non
     assert "tables" not in docs[0].meta
 
 
-# ======================================================================
-# Metadata mutation protection (deepcopy)
-# ======================================================================
-
-
 def test_deepcopy_per_page_nested_meta_not_shared() -> None:
     """Nested mutable values in user_meta must not be shared across page documents."""
     converter = KreuzbergConverter()
@@ -1168,11 +1158,6 @@ def test_deepcopy_unified_nested_meta_not_shared() -> None:
     assert user_meta["tags"] == ["original"]
 
 
-# ======================================================================
-# Serialization helpers
-# ======================================================================
-
-
 def test_helper_serialize_page_tables_with_dicts() -> None:
     tables = [{"cells": [["A"], ["1"]], "markdown": "| A |", "page_number": 1}]
     result = _serialize_page_tables(tables)
@@ -1200,3 +1185,44 @@ def test_helper_serialize_warnings_with_objects() -> None:
     w.message = "skipped element"
     result = _serialize_warnings([w])
     assert result == [{"source": "parser", "message": "skipped element"}]
+
+
+def test_metadata_file_extensions_for_pdf() -> None:
+    """PDF extraction should include file_extensions in metadata."""
+    converter = KreuzbergConverter(batch=False)
+    result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
+
+    doc = result["documents"][0]
+    assert "file_extensions" in doc.meta
+    assert "pdf" in doc.meta["file_extensions"]
+
+
+def test_metadata_file_extensions_for_text() -> None:
+    """Text file extraction should include file_extensions in metadata."""
+    converter = KreuzbergConverter(batch=False)
+    result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
+
+    doc = result["documents"][0]
+    assert "file_extensions" in doc.meta
+    assert "txt" in doc.meta["file_extensions"]
+
+
+def test_metadata_file_extensions_mock() -> None:
+    """_build_extraction_metadata should add file_extensions from MIME type."""
+    result = _make_mock_result(mime_type="application/pdf")
+    converter = KreuzbergConverter()
+
+    with patch(f"{CONVERTER_MODULE}.get_extensions_for_mime", return_value=["pdf"]):
+        meta = converter._build_extraction_metadata(result)
+
+    assert meta["mime_type"] == "application/pdf"
+    assert meta["file_extensions"] == ["pdf"]
+
+
+def test_metadata_no_file_extensions_when_no_mime() -> None:
+    """No file_extensions key when MIME type is not available."""
+    result = _make_mock_result(mime_type=None)
+    converter = KreuzbergConverter()
+    meta = converter._build_extraction_metadata(result)
+
+    assert "file_extensions" not in meta
