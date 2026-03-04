@@ -546,10 +546,6 @@ class KreuzbergConverter:
 
         return raw
 
-    # ------------------------------------------------------------------
-    # Error handling
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _log_extraction_error(source: Any, error: Exception) -> None:
         """
@@ -573,10 +569,6 @@ class KreuzbergConverter:
                 source=source,
                 error=error,
             )
-
-    # ------------------------------------------------------------------
-    # Main entry point
-    # ------------------------------------------------------------------
 
     @component.output_types(documents=list[Document], raw_extraction=list[dict[str, Any]])
     def run(
@@ -700,10 +692,6 @@ class KreuzbergConverter:
             documents.extend(docs)
             raw_extractions.append(self._serialize_result(result))
 
-    # ------------------------------------------------------------------
-    # Introspection
-    # ------------------------------------------------------------------
-
     @staticmethod
     def supported_extractors() -> list[str]:
         """
@@ -724,12 +712,6 @@ class KreuzbergConverter:
         """
         return cast(list[str], list_ocr_backends())
 
-
-# ======================================================================
-# Module-level serialization helpers
-# ======================================================================
-
-
 def _serialize_tables(tables: list[Any]) -> list[dict[str, Any]]:
     """Serialize ExtractedTable objects to plain dicts."""
     return [
@@ -740,7 +722,6 @@ def _serialize_tables(tables: list[Any]) -> list[dict[str, Any]]:
         }
         for t in tables
     ]
-
 
 def _serialize_page_tables(tables: list[Any]) -> list[dict[str, Any]]:
     """Serialize tables from a page context (may be objects or dicts)."""
