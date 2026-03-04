@@ -162,14 +162,7 @@ class KreuzbergConverter:
         init_params = data["init_parameters"]
         config_data = init_params.get("config")
         if isinstance(config_data, str):
-            # JSON string from config_to_json — round-trip via a temp file
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                tmp_path = f.name
-                f.write(config_data)
-            try:
-                init_params["config"] = ExtractionConfig.from_file(tmp_path)
-            finally:
-                Path(tmp_path).unlink(missing_ok=True)
+            init_params["config"] = _config_from_json_str(config_data)
         return default_from_dict(cls, data)
 
     def _build_config(self) -> ExtractionConfig:
@@ -351,11 +344,13 @@ class KreuzbergConverter:
 
         When ``output_format`` is ``"markdown"`` or ``"html"``, kreuzberg already
         inlines tables into the content, so appending is skipped to avoid duplicates.
+
+        Tables may be ``ExtractedTable`` objects or plain dicts (page context).
         """
         if not tables or output_format in ("markdown", "html"):
             return text
 
-        table_blocks = [t.markdown for t in tables if t.markdown]
+        table_blocks = [md for t in tables if (md := _get_table_markdown(t))]
         if not table_blocks:
             return text
 
@@ -406,19 +401,12 @@ class KreuzbergConverter:
     ) -> list[Document]:
         """Create one Document per page."""
         documents: list[Document] = []
-        append_tables = result.output_format not in ("markdown", "html")
         for page in result.pages:
             page_content = page.get("content", "")
             page_tables = page.get("tables", [])
             page_images = page.get("images", [])
 
-            if append_tables and page_tables:
-                table_blocks = [t.markdown for t in page_tables if hasattr(t, "markdown") and t.markdown]
-                if not table_blocks:
-                    # Tables might be dicts in page context
-                    table_blocks = [t["markdown"] for t in page_tables if isinstance(t, dict) and t.get("markdown")]
-                if table_blocks:
-                    page_content = page_content + "\n\n" + "\n\n".join(table_blocks)
+            page_content = self._assemble_content(page_content, page_tables, result.output_format)
 
             page_meta: dict[str, Any] = {
                 **base_meta,
@@ -603,13 +591,10 @@ class KreuzbergConverter:
 
         config = self._build_config()
 
-        documents: list[Document] = []
-        raw_extractions: list[dict[str, Any]] = []
-
         if self.batch and len(expanded_sources) > 1:
-            self._run_batch(expanded_sources, meta_list, config, documents, raw_extractions)
+            documents, raw_extractions = self._run_batch(expanded_sources, meta_list, config)
         else:
-            self._run_sequential(expanded_sources, meta_list, config, documents, raw_extractions)
+            documents, raw_extractions = self._run_sequential(expanded_sources, meta_list, config)
 
         return {"documents": documents, "raw_extraction": raw_extractions}
 
@@ -618,10 +603,14 @@ class KreuzbergConverter:
         sources: list[str | Path | ByteStream],
         meta_list: list[dict[str, Any]],
         config: ExtractionConfig,
-        documents: list[Document],
-        raw_extractions: list[dict[str, Any]],
-    ) -> None:
-        """Process sources one at a time."""
+    ) -> tuple[list[Document], list[dict[str, Any]]]:
+        """Process sources one at a time.
+
+        :returns: Tuple of (documents, raw_extractions).
+        """
+        documents: list[Document] = []
+        raw_extractions: list[dict[str, Any]] = []
+
         for source, user_meta in zip(sources, meta_list, strict=True):
             try:
                 bytestream = get_bytestream_from_source(source)
@@ -643,15 +632,21 @@ class KreuzbergConverter:
             documents.extend(docs)
             raw_extractions.append(self._serialize_result(result))
 
+        return documents, raw_extractions
+
     def _run_batch(
         self,
         sources: list[str | Path | ByteStream],
         meta_list: list[dict[str, Any]],
         config: ExtractionConfig,
-        documents: list[Document],
-        raw_extractions: list[dict[str, Any]],
-    ) -> None:
-        """Process sources using batch extraction."""
+    ) -> tuple[list[Document], list[dict[str, Any]]]:
+        """Process sources using batch extraction.
+
+        :returns: Tuple of (documents, raw_extractions).
+        """
+        documents: list[Document] = []
+        raw_extractions: list[dict[str, Any]] = []
+
         # Pre-validate sources (get bytestreams for metadata)
         bytestreams: list[ByteStream | None] = []
         for source in sources:
@@ -675,6 +670,8 @@ class KreuzbergConverter:
             documents.extend(docs)
             raw_extractions.append(self._serialize_result(result))
 
+        return documents, raw_extractions
+
     @staticmethod
     def supported_extractors() -> list[str]:
         """
@@ -694,6 +691,14 @@ class KreuzbergConverter:
             List of OCR backend names.
         """
         return cast(list[str], list_ocr_backends())
+
+def _get_table_markdown(table: Any) -> str | None:
+    """Get markdown string from a table (``ExtractedTable`` object or dict)."""
+    if isinstance(table, dict):
+        return table.get("markdown") or None
+    md = getattr(table, "markdown", None)
+    return md or None
+
 
 def _serialize_keywords(keywords: list[Any]) -> list[dict[str, Any]]:
     """Serialize ExtractedKeyword objects to plain dicts."""
@@ -767,14 +772,13 @@ def _serialize_annotations(annotations: list[Any]) -> list[dict[str, Any]]:
     return serialized
 
 
-def _copy_config(config: ExtractionConfig) -> ExtractionConfig:
+def _config_from_json_str(json_str: str) -> ExtractionConfig:
     """
-    Deep copy an ``ExtractionConfig`` by round-tripping through JSON.
+    Load an ``ExtractionConfig`` from a JSON string via a temporary file.
 
-    This is necessary because kreuzberg's PyO3 config objects don't support
-    Python's ``copy.deepcopy()`` protocol.
+    This is necessary because kreuzberg's PyO3 config objects don't expose a
+    ``from_json()`` classmethod — only ``from_file()``.
     """
-    json_str = config_to_json(config)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         tmp_path = f.name
         f.write(json_str)
@@ -782,3 +786,13 @@ def _copy_config(config: ExtractionConfig) -> ExtractionConfig:
         return ExtractionConfig.from_file(tmp_path)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+
+def _copy_config(config: ExtractionConfig) -> ExtractionConfig:
+    """
+    Deep copy an ``ExtractionConfig`` by round-tripping through JSON.
+
+    This is necessary because kreuzberg's PyO3 config objects don't support
+    Python's ``copy.deepcopy()`` protocol.
+    """
+    return _config_from_json_str(config_to_json(config))

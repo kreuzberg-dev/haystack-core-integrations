@@ -12,7 +12,7 @@ not require any environment variables or skip conditions.
 from pathlib import Path
 
 import pytest
-from haystack.dataclasses import ByteStream
+from haystack.dataclasses import ByteStream, Document
 from kreuzberg import ChunkingConfig, ExtractionConfig, KeywordConfig, PageConfig
 
 from haystack_integrations.components.converters.kreuzberg import KreuzbergConverter
@@ -20,12 +20,19 @@ from haystack_integrations.components.converters.kreuzberg import KreuzbergConve
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+def _docs(result: dict) -> list[Document]:
+    """Type-narrow converter output's documents to list[Document]."""
+    docs = result["documents"]
+    assert all(isinstance(d, Document) for d in docs)
+    return docs
+
+
 @pytest.mark.integration
 def test_pdf_extraction() -> None:
     """PDF extraction returns a document with real text content and rich metadata."""
     converter = KreuzbergConverter()
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 1
     doc = docs[0]
@@ -46,7 +53,7 @@ def test_txt_extraction() -> None:
     """TXT extraction returns content matching the source file."""
     converter = KreuzbergConverter()
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 1
     assert len(result["raw_extraction"]) == 1
@@ -61,7 +68,7 @@ def test_docx_extraction() -> None:
     """DOCX extraction returns real text content."""
     converter = KreuzbergConverter()
     result = converter.run(sources=[FIXTURES_DIR / "sample.docx"])
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 1
     assert "Demonstration of DOCX support" in docs[0].content
@@ -73,7 +80,7 @@ def test_html_extraction() -> None:
     """HTML extraction returns text stripped of markup."""
     converter = KreuzbergConverter()
     result = converter.run(sources=[FIXTURES_DIR / "sample.html"])
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 1
     assert "Sample Document" in docs[0].content
@@ -93,29 +100,29 @@ def test_multiple_mixed_sources() -> None:
     ]
     converter = KreuzbergConverter()
     result = converter.run(sources=sources)
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 4
     assert all(doc.content for doc in docs)
 
 
 @pytest.mark.integration
-def test_extraction_multiple_sources() -> None:
+def test_extraction_multiple_sources(sequential_converter: KreuzbergConverter) -> None:
     """Two sources produce two documents and two raw extractions."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt", FIXTURES_DIR / "sample.pdf"])
     assert len(result["documents"]) == 2
     assert len(result["raw_extraction"]) == 2
 
 
 @pytest.mark.integration
-def test_extraction_with_string_path() -> None:
+def test_extraction_with_string_path(sequential_converter: KreuzbergConverter) -> None:
     """String path (not Path object) is accepted and converted."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[str(FIXTURES_DIR / "sample.txt")])
 
     assert len(result["documents"]) == 1
-    assert result["documents"][0].meta["file_path"] == "sample.txt"
+    assert _docs(result)[0].meta["file_path"] == "sample.txt"
 
 
 @pytest.mark.integration
@@ -126,32 +133,35 @@ def test_bytestream_source() -> None:
 
     converter = KreuzbergConverter()
     result = converter.run(sources=[bytestream])
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 1
     assert "Sample PDF" in docs[0].content
 
 
 @pytest.mark.integration
-def test_bytestream_plain_text() -> None:
+def test_bytestream_plain_text(sequential_converter: KreuzbergConverter) -> None:
     """ByteStream with plain text content is extracted correctly."""
     bs = ByteStream(data=b"Hello from ByteStream!", mime_type="text/plain")
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[bs])
 
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert doc.content == "Hello from ByteStream!"
 
 
 @pytest.mark.integration
-def test_extraction_with_bytestream_auto_detect_mime() -> None:
+def test_extraction_with_bytestream_auto_detect_mime(sequential_converter: KreuzbergConverter) -> None:
     """ByteStream without explicit MIME type is auto-detected."""
     bs = ByteStream(data=b"Hello auto-detect", mime_type=None)
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[bs])
 
     assert len(result["documents"]) == 1
-    assert result["documents"][0].content == "Hello auto-detect"
+    doc = _docs(result)[0]
+    assert doc.content == "Hello auto-detect"
+    assert "mime_type" in doc.meta
+    assert doc.meta["mime_type"] is not None
 
 
 @pytest.mark.integration
@@ -159,7 +169,7 @@ def test_metadata_populated_on_real_docs() -> None:
     """Real extraction populates mime_type, output_format, and file_path."""
     converter = KreuzbergConverter()
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    meta = result["documents"][0].meta
+    meta = _docs(result)[0].meta
 
     assert "mime_type" in meta
     assert "output_format" in meta
@@ -167,31 +177,31 @@ def test_metadata_populated_on_real_docs() -> None:
 
 
 @pytest.mark.integration
-def test_metadata_quality_score() -> None:
+def test_metadata_quality_score(sequential_converter: KreuzbergConverter) -> None:
     """Extraction populates a float quality_score."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert "quality_score" in doc.meta
     assert isinstance(doc.meta["quality_score"], float)
 
 
 @pytest.mark.integration
-def test_metadata_detected_languages() -> None:
+def test_metadata_detected_languages(sequential_converter: KreuzbergConverter) -> None:
     """Language detection populates detected_languages list."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert "detected_languages" in doc.meta
     assert isinstance(doc.meta["detected_languages"], list)
 
 
 @pytest.mark.integration
-def test_metadata_output_format_tracking() -> None:
+def test_metadata_output_format_tracking(sequential_converter: KreuzbergConverter) -> None:
     """Default extraction tracks output_format as 'plain' and result_format as 'unified'."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert doc.meta["output_format"] == "plain"
     assert doc.meta["result_format"] == "unified"
 
@@ -204,7 +214,7 @@ def test_metadata_keyword_extraction() -> None:
         batch=False,
     )
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert "extracted_keywords" in doc.meta
     keywords = doc.meta["extracted_keywords"]
     assert len(keywords) == 3
@@ -218,7 +228,7 @@ def test_metadata_store_full_path_false() -> None:
     """store_full_path=False stores just the filename."""
     converter = KreuzbergConverter(store_full_path=False, batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert doc.meta["file_path"] == "sample.txt"
 
 
@@ -227,41 +237,41 @@ def test_metadata_store_full_path_true() -> None:
     """store_full_path=True stores the absolute path."""
     converter = KreuzbergConverter(store_full_path=True, batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     # Full path should contain directory separators
     assert "/" in str(doc.meta["file_path"]) or "\\" in str(doc.meta["file_path"])
 
 
 @pytest.mark.integration
-def test_metadata_user_overrides_extraction() -> None:
+def test_metadata_user_overrides_extraction(sequential_converter: KreuzbergConverter) -> None:
     """User-supplied metadata overrides extraction-generated metadata."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(
         sources=[FIXTURES_DIR / "sample.pdf"],
         meta={"title": "User Override Title"},
     )
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert doc.meta["title"] == "User Override Title"
 
 
 @pytest.mark.integration
-def test_metadata_file_extensions_for_pdf() -> None:
+def test_metadata_file_extensions_for_pdf(sequential_converter: KreuzbergConverter) -> None:
     """PDF extraction should include file_extensions in metadata."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
 
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert "file_extensions" in doc.meta
     assert "pdf" in doc.meta["file_extensions"]
 
 
 @pytest.mark.integration
-def test_metadata_file_extensions_for_text() -> None:
+def test_metadata_file_extensions_for_text(sequential_converter: KreuzbergConverter) -> None:
     """Text file extraction should include file_extensions in metadata."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
 
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert "file_extensions" in doc.meta
     assert "txt" in doc.meta["file_extensions"]
 
@@ -271,7 +281,7 @@ def test_tables_appended_to_content_for_plain_text() -> None:
     """With default plain text output, tables are appended to content."""
     converter = KreuzbergConverter()
     result = converter.run(sources=[FIXTURES_DIR / "sample.docx"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
 
     # Table markdown should be in content
     assert "| ITEM | NEEDED |" in doc.content
@@ -286,7 +296,7 @@ def test_tables_auto_inlined_for_markdown_output() -> None:
     for fmt in ("markdown", "html"):
         converter = KreuzbergConverter(config=ExtractionConfig(output_format=fmt))
         result = converter.run(sources=[FIXTURES_DIR / "sample.docx"])
-        doc = result["documents"][0]
+        doc = _docs(result)[0]
 
         # kreuzberg inlines table data into content for markdown/html
         assert "ITEM" in doc.content, f"Table content missing for {fmt}"
@@ -300,7 +310,7 @@ def test_tables_in_metadata_regardless_of_format() -> None:
     for fmt in ("plain", "markdown", "html"):
         converter = KreuzbergConverter(config=ExtractionConfig(output_format=fmt))
         result = converter.run(sources=[FIXTURES_DIR / "sample.docx"])
-        doc = result["documents"][0]
+        doc = _docs(result)[0]
 
         assert doc.meta["table_count"] == 5, f"table_count missing for {fmt}"
         assert len(doc.meta["tables"]) == 5, f"tables list wrong for {fmt}"
@@ -313,7 +323,7 @@ def test_custom_metadata_single_dict() -> None:
     sources = [FIXTURES_DIR / "sample.pdf", FIXTURES_DIR / "sample.txt"]
     converter = KreuzbergConverter()
     result = converter.run(sources=sources, meta={"project": "haystack"})
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 2
     assert all(doc.meta["project"] == "haystack" for doc in docs)
@@ -326,7 +336,7 @@ def test_custom_metadata_per_source() -> None:
     meta = [{"idx": 0}, {"idx": 1}]
     converter = KreuzbergConverter()
     result = converter.run(sources=sources, meta=meta)
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert docs[0].meta["idx"] == 0
     assert docs[1].meta["idx"] == 1
@@ -338,7 +348,7 @@ def test_per_page_extraction() -> None:
     config = ExtractionConfig(pages=PageConfig(extract_pages=True))
     converter = KreuzbergConverter(config=config)
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) == 3
     assert all(doc.content for doc in docs)
@@ -358,11 +368,11 @@ def test_per_page_raw_extraction_is_one_per_source() -> None:
 
 
 @pytest.mark.integration
-def test_per_page_document_metadata() -> None:
+def test_per_page_document_metadata(per_page_converter: KreuzbergConverter) -> None:
     """Each page document has page_number, is_blank, and file_path metadata."""
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
+    converter = per_page_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    docs = result["documents"]
+    docs = _docs(result)
 
     for i, doc in enumerate(docs, start=1):
         assert doc.meta["page_number"] == i
@@ -371,14 +381,14 @@ def test_per_page_document_metadata() -> None:
 
 
 @pytest.mark.integration
-def test_per_page_with_user_metadata() -> None:
+def test_per_page_with_user_metadata(per_page_converter: KreuzbergConverter) -> None:
     """User metadata is applied to all page documents."""
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
+    converter = per_page_converter
     result = converter.run(
         sources=[FIXTURES_DIR / "sample.pdf"],
         meta={"source": "test"},
     )
-    for doc in result["documents"]:
+    for doc in _docs(result):
         assert doc.meta["source"] == "test"
 
 
@@ -388,7 +398,7 @@ def test_chunking_produces_multiple_documents() -> None:
     config = ExtractionConfig(chunking=ChunkingConfig(preset="sentence"))
     converter = KreuzbergConverter(config=config)
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
-    docs = result["documents"]
+    docs = _docs(result)
 
     assert len(docs) > 1
     assert all(doc.content for doc in docs)
@@ -410,8 +420,8 @@ def test_batch_vs_sequential_parity() -> None:
     batch_result = KreuzbergConverter(batch=True).run(sources=sources)
     sequential_result = KreuzbergConverter(batch=False).run(sources=sources)
 
-    batch_docs = batch_result["documents"]
-    seq_docs = sequential_result["documents"]
+    batch_docs = _docs(batch_result)
+    seq_docs = _docs(sequential_result)
 
     assert len(batch_docs) == len(seq_docs)
     for b, s in zip(batch_docs, seq_docs):
@@ -450,7 +460,7 @@ def test_batch_skips_failed_sources() -> None:
     converter = KreuzbergConverter(batch=True)
     result = converter.run(sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"])
     # nonexistent should be skipped, sample.txt should succeed
-    assert len(result["documents"]) >= 1
+    assert len(result["documents"]) == 1
 
 
 @pytest.mark.integration
@@ -458,7 +468,7 @@ def test_directory_expansion() -> None:
     """Passing a directory processes all files inside it."""
     converter = KreuzbergConverter()
     result = converter.run(sources=[FIXTURES_DIR])
-    docs = result["documents"]
+    docs = _docs(result)
 
     # fixtures/ contains 4 files
     assert len(docs) == 4
@@ -468,29 +478,29 @@ def test_directory_expansion() -> None:
 
 
 @pytest.mark.integration
-def test_directory_with_single_dict_meta() -> None:
+def test_directory_with_single_dict_meta(sequential_converter: KreuzbergConverter) -> None:
     """Single metadata dict is applied to all documents from directory expansion."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(
         sources=[FIXTURES_DIR],
         meta={"source": "fixtures"},
     )
-    for doc in result["documents"]:
+    for doc in _docs(result):
         assert doc.meta["source"] == "fixtures"
 
 
 @pytest.mark.integration
-def test_directory_with_list_meta_raises() -> None:
+def test_directory_with_list_meta_raises(sequential_converter: KreuzbergConverter) -> None:
     """Per-source metadata list raises ValueError when directories are present."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     with pytest.raises(ValueError, match="directories are present"):
         converter.run(sources=[FIXTURES_DIR], meta=[{"a": 1}])
 
 
 @pytest.mark.integration
-def test_directory_mixed_with_file() -> None:
+def test_directory_mixed_with_file(sequential_converter: KreuzbergConverter) -> None:
     """Directory and ByteStream sources can be mixed."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     bs = ByteStream(data=b"Extra source", mime_type="text/plain")
     result = converter.run(sources=[FIXTURES_DIR, bs])
     # 4 from fixtures dir + 1 bytestream = 5
@@ -514,9 +524,9 @@ def test_raw_extraction_output() -> None:
 
 
 @pytest.mark.integration
-def test_raw_extraction_metadata_structure() -> None:
+def test_raw_extraction_metadata_structure(sequential_converter: KreuzbergConverter) -> None:
     """Raw extraction metadata dict includes title and format_type."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
 
     raw_meta = result["raw_extraction"][0]["metadata"]
@@ -540,9 +550,9 @@ def test_raw_extraction_with_keywords() -> None:
 
 
 @pytest.mark.integration
-def test_raw_extraction_pages_when_per_page() -> None:
+def test_raw_extraction_pages_when_per_page(per_page_converter: KreuzbergConverter) -> None:
     """Raw extraction includes pages list when per-page extraction is enabled."""
-    converter = KreuzbergConverter(config=ExtractionConfig(pages=PageConfig(extract_pages=True)), batch=False)
+    converter = per_page_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.pdf"])
 
     raw = result["raw_extraction"][0]
@@ -555,7 +565,7 @@ def test_output_format_markdown() -> None:
     """Markdown output format is tracked in document metadata."""
     converter = KreuzbergConverter(config=ExtractionConfig(output_format="markdown"), batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.html"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert doc.meta["output_format"] == "markdown"
 
 
@@ -564,23 +574,23 @@ def test_output_format_html() -> None:
     """HTML output format is tracked in document metadata."""
     converter = KreuzbergConverter(config=ExtractionConfig(output_format="html"), batch=False)
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
-    doc = result["documents"][0]
+    doc = _docs(result)[0]
     assert doc.meta["output_format"] == "html"
 
 
 @pytest.mark.integration
-def test_extraction_nonexistent_file_skipped() -> None:
+def test_extraction_nonexistent_file_skipped(sequential_converter: KreuzbergConverter) -> None:
     """Nonexistent file is skipped; valid source still produces output."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=["nonexistent.pdf", FIXTURES_DIR / "sample.txt"])
     assert len(result["documents"]) == 1
-    assert result["documents"][0].meta["file_path"] == "sample.txt"
+    assert _docs(result)[0].meta["file_path"] == "sample.txt"
 
 
 @pytest.mark.integration
-def test_edge_all_sources_fail() -> None:
+def test_edge_all_sources_fail(sequential_converter: KreuzbergConverter) -> None:
     """When all sources fail, result has empty documents and raw_extraction."""
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=["nonexistent1.pdf", "nonexistent2.pdf"])
     assert result["documents"] == []
     assert result["raw_extraction"] == []

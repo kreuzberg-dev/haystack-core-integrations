@@ -20,7 +20,7 @@ description = "Kreuzberg document converter for Haystack"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-keywords = []
+keywords = ["haystack", "kreuzberg", "document-conversion", "pdf", "ocr"]
 authors = [{ name = "deepset GmbH", email = "info@deepset.ai" }]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",

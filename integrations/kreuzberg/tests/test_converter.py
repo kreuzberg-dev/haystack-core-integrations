@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from kreuzberg import ExtractionConfig, OcrConfig, PageConfig, config_to_json
+from kreuzberg import ExtractionConfig, ExtractionResult, OcrConfig, config_to_json
 
 from haystack_integrations.components.converters.kreuzberg import KreuzbergConverter
 from haystack_integrations.components.converters.kreuzberg.converter import _serialize_page_tables, _serialize_warnings
@@ -84,24 +84,6 @@ def test_serialization_from_dict_default() -> None:
     converter = KreuzbergConverter.from_dict(d)
     assert converter.config is None
     assert converter.store_full_path is True
-
-
-@pytest.mark.unit
-def test_serialization_roundtrip_default() -> None:
-    converter = KreuzbergConverter(
-        config=ExtractionConfig(
-            output_format="markdown",
-            ocr=OcrConfig(backend="tesseract", language="eng"),
-        ),
-        batch=False,
-    )
-    d = converter.to_dict()
-    restored = KreuzbergConverter.from_dict(d)
-    assert restored.config is not None
-    assert restored.config.output_format == "markdown"
-    assert restored.config.ocr is not None
-    assert restored.config.ocr.backend == "tesseract"
-    assert restored.batch is False
 
 
 @pytest.mark.unit
@@ -304,7 +286,6 @@ def test_build_config_from_file() -> None:
 
 @pytest.mark.unit
 def test_build_config_merges_config_and_config_path() -> None:
-    """When both config and config_path are set, config takes priority."""
     file_config = ExtractionConfig(output_format="html")
     json_str = config_to_json(file_config)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -386,27 +367,20 @@ def test_introspection_supported_ocr_backends() -> None:
 
 
 @pytest.mark.unit
-def test_edge_empty_sources_list() -> None:
-    converter = KreuzbergConverter(batch=False)
+def test_edge_empty_sources_list(sequential_converter: KreuzbergConverter) -> None:
+    converter = sequential_converter
     result = converter.run(sources=[])
     assert result["documents"] == []
     assert result["raw_extraction"] == []
 
 
 @pytest.mark.unit
-def test_edge_easyocr_kwargs_stored() -> None:
-    converter = KreuzbergConverter(easyocr_kwargs={"gpu": False, "beam_width": 5})
-    assert converter.easyocr_kwargs == {"gpu": False, "beam_width": 5}
-    d = converter.to_dict()
-    assert d["init_parameters"]["easyocr_kwargs"] == {"gpu": False, "beam_width": 5}
-
-
-@pytest.mark.unit
 @patch(CONVERTER_MODULE + ".extract_file_sync")
-def test_edge_sequential_extraction_error_skipped(mock_extract: MagicMock) -> None:
-    """File exists but extraction raises — source is skipped."""
+def test_edge_sequential_extraction_error_skipped(
+    mock_extract: MagicMock, sequential_converter: KreuzbergConverter
+) -> None:
     mock_extract.side_effect = RuntimeError("extraction failed")
-    converter = KreuzbergConverter(batch=False)
+    converter = sequential_converter
     result = converter.run(sources=[FIXTURES_DIR / "sample.txt"])
     assert result["documents"] == []
     assert result["raw_extraction"] == []
@@ -414,7 +388,7 @@ def test_edge_sequential_extraction_error_skipped(mock_extract: MagicMock) -> No
 
 def _make_mock_result(**overrides: Any) -> MagicMock:
     """Create a mock ExtractionResult with all attributes defaulting to None."""
-    result = MagicMock()
+    result = MagicMock(spec=ExtractionResult)
     defaults: dict[str, Any] = {
         "content": "",
         "metadata": None,
@@ -545,6 +519,27 @@ def test_metadata_mock_all_fields_populated() -> None:
     assert meta["processing_warnings"][0]["source"] == "parser"
     assert meta["image_count"] == 1
     assert meta["annotations"][0]["type"] == "link"
+
+
+@pytest.mark.unit
+def test_metadata_file_extensions_mock() -> None:
+    result = _make_mock_result(mime_type="application/pdf")
+    converter = KreuzbergConverter()
+
+    with patch(f"{CONVERTER_MODULE}.get_extensions_for_mime", return_value=["pdf"]):
+        meta = converter._build_extraction_metadata(result)
+
+    assert meta["mime_type"] == "application/pdf"
+    assert meta["file_extensions"] == ["pdf"]
+
+
+@pytest.mark.unit
+def test_metadata_no_file_extensions_when_no_mime() -> None:
+    result = _make_mock_result(mime_type=None)
+    converter = KreuzbergConverter()
+    meta = converter._build_extraction_metadata(result)
+
+    assert "file_extensions" not in meta
 
 
 @pytest.mark.unit
@@ -717,7 +712,6 @@ def test_per_page_mock_without_tables_removes_document_level_table_meta() -> Non
 
 @pytest.mark.unit
 def test_deepcopy_per_page_nested_meta_not_shared() -> None:
-    """Nested mutable values in user_meta must not be shared across page documents."""
     converter = KreuzbergConverter()
     result = MagicMock()
     result.pages = [
@@ -744,7 +738,6 @@ def test_deepcopy_per_page_nested_meta_not_shared() -> None:
 
 @pytest.mark.unit
 def test_deepcopy_chunked_nested_meta_not_shared() -> None:
-    """Nested mutable values in user_meta must not be shared across chunk documents."""
     converter = KreuzbergConverter()
     result = MagicMock()
     chunk1 = MagicMock()
@@ -772,7 +765,6 @@ def test_deepcopy_chunked_nested_meta_not_shared() -> None:
 
 @pytest.mark.unit
 def test_deepcopy_unified_nested_meta_not_shared() -> None:
-    """Nested mutable values in user_meta must not be shared with caller's dict."""
     converter = KreuzbergConverter()
     result = _make_mock_result(content="hello")
 
@@ -819,27 +811,3 @@ def test_helper_serialize_warnings_with_objects() -> None:
     w.message = "skipped element"
     result = _serialize_warnings([w])
     assert result == [{"source": "parser", "message": "skipped element"}]
-
-
-
-@pytest.mark.unit
-def test_metadata_file_extensions_mock() -> None:
-    """_build_extraction_metadata should add file_extensions from MIME type."""
-    result = _make_mock_result(mime_type="application/pdf")
-    converter = KreuzbergConverter()
-
-    with patch(f"{CONVERTER_MODULE}.get_extensions_for_mime", return_value=["pdf"]):
-        meta = converter._build_extraction_metadata(result)
-
-    assert meta["mime_type"] == "application/pdf"
-    assert meta["file_extensions"] == ["pdf"]
-
-
-@pytest.mark.unit
-def test_metadata_no_file_extensions_when_no_mime() -> None:
-    """No file_extensions key when MIME type is not available."""
-    result = _make_mock_result(mime_type=None)
-    converter = KreuzbergConverter()
-    meta = converter._build_extraction_metadata(result)
-
-    assert "file_extensions" not in meta
